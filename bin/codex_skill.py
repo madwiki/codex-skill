@@ -10,7 +10,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator, Optional, Tuple
+from typing import Iterator, Optional
 
 
 CODEX_BIN = os.environ.get("CODEX_BIN", "codex")
@@ -108,39 +108,48 @@ def write_session_id(repo_root: Path, session_id: str) -> None:
     tmp.replace(path)
 
 
-def split_verbatim(stdin_text: str) -> Tuple[str, str]:
+def normalize_agent_brief(stdin_text: str) -> str:
     text = stdin_text.replace("\r\n", "\n").replace("\r", "\n")
-    stripped = text.lstrip()
-    if not stripped.startswith(VERBATIM_BEGIN):
-        raise ValueError(
-            f"Input must start with a verbatim user block: {VERBATIM_BEGIN} ... {VERBATIM_END}"
-        )
+    stripped = text.strip()
+    if not stripped:
+        raise ValueError("Input is empty. Provide a collaboration brief via stdin.")
 
-    offset = len(text) - len(stripped)
-    begin_idx = offset
-    end_idx = text.find(VERBATIM_END, begin_idx)
-    if end_idx == -1:
+    if VERBATIM_BEGIN in stripped and VERBATIM_END not in stripped:
         raise ValueError(f"Missing verbatim end marker: {VERBATIM_END}")
+    if VERBATIM_END in stripped and VERBATIM_BEGIN not in stripped:
+        raise ValueError(f"Missing verbatim begin marker: {VERBATIM_BEGIN}")
 
-    after_end = end_idx + len(VERBATIM_END)
-    if after_end < len(text) and text[after_end : after_end + 1] == "\n":
-        after_end += 1
-
-    verbatim = text[begin_idx:after_end].strip("\n") + "\n"
-    rest = text[after_end:]
-    return verbatim, rest
+    return stripped + "\n"
 
 
 def role_card_text() -> str:
     return "\n".join(
         [
             "<<<ROLE_CARD_BEGIN>>>",
-            "This session may include messages from a human (via `codex resume`) and from an AI agent (via codex-skill scripts).",
-            "Treat the verbatim user block as the source of truth for user intent and constraints.",
-            "Treat everything after the verbatim block as agent-authored context, questions, plans, or delivery summaries.",
+            "This is a persistent collaboration session between Codex and an AI coding agent.",
+            "The agent will periodically brief you with durable background, what happened since your last reply, optional verbatim user messages, and the agent's current request.",
+            "Treat every message as the next turn in the same collaboration thread, not as an isolated one-shot question.",
+            "A verbatim user block is optional evidence. It appears only when the user actually said something new since the last Codex exchange.",
+            "If there is no verbatim user block, do not infer that the agent forgot it; use the background, turn context, and agent message instead.",
+            "Treat Background as durable task context, Since last Codex response as the latest delta, and Agent message to Codex as the direct request.",
             'When replying to agent messages, address the agent and refer to the human as "the user" (not "you").',
             "If user input is required, list the minimum questions for the agent to ask the user (do not ask the user directly).",
             "<<<ROLE_CARD_END>>>",
+        ]
+    )
+
+
+def collaboration_header(tool: str) -> str:
+    return "\n".join(
+        [
+            "<<<CODEX_SKILL_BRIEF_BEGIN>>>",
+            f"origin=codex-skill tool={tool}",
+            "You are speaking with an AI coding agent, not the end user.",
+            "This brief continues the persistent collaboration session.",
+            "This protocol supersedes older codex-skill prompts that required a leading verbatim user block.",
+            "Do not require a verbatim user message; it is optional and should appear only when fresh user text exists.",
+            "Do not ask the end user directly. If user input is required, list the minimum questions for the agent to ask.",
+            "<<<CODEX_SKILL_BRIEF_END>>>",
         ]
     )
 
@@ -161,42 +170,27 @@ def tool_suffix(tool: str) -> str:
         return "\n".join(
             [
                 "Please answer in 4 sections:",
-                "1) Correctness vs the verbatim user requirements",
+                "1) Correctness vs the user requirements and task context",
                 "2) Likely regressions / high-risk areas",
                 "3) Missing coverage & minimal tests to add",
                 "4) Minimum user confirmations (if any)",
                 "Keep it concise and prioritize blockers over nitpicks.",
             ]
         )
-    return "Reply in English and keep it concise."
+    return "Reply concisely. Use the agent's language unless there is a reason to switch."
 
 
 def build_prompt(tool: str, stdin_text: str, include_role_card: bool) -> str:
-    verbatim, rest = split_verbatim(stdin_text)
-    parts: list[str] = [verbatim.rstrip("\n")]
+    brief = normalize_agent_brief(stdin_text)
+    parts: list[str] = []
 
-    agent_parts: list[str] = []
     if include_role_card:
-        agent_parts.append(role_card_text())
+        parts.append(role_card_text())
 
-    agent_parts.append(
-        "\n".join(
-            [
-                "<<<AGENT_MESSAGE_BEGIN>>>",
-                f"origin=codex-skill tool={tool}",
-                "You are speaking with an AI coding agent (not the end user).",
-                "Do not ask the end user directly. If user input is required, list the minimum questions for the agent to ask.",
-                "<<<AGENT_MESSAGE_END>>>",
-            ]
-        )
-    )
+    parts.append(collaboration_header(tool))
+    parts.append(brief.rstrip("\n"))
+    parts.append(tool_suffix(tool))
 
-    rest_stripped = rest.strip()
-    if rest_stripped:
-        agent_parts.append(rest_stripped)
-    agent_parts.append(tool_suffix(tool))
-
-    parts.append("\n\n".join(agent_parts))
     return "\n\n".join(parts).strip() + "\n"
 
 
@@ -399,7 +393,7 @@ def main() -> int:
         help="Working directory used to locate the project session root.",
     )
     parser.add_argument("--new-session", action="store_true", help="Force creating a new Codex session.")
-    parser.add_argument("--timeout-s", type=int, default=180, help="codex exec timeout in seconds.")
+    parser.add_argument("--timeout-s", type=int, default=3600, help="codex exec timeout in seconds.")
     parser.add_argument("--model", default=None, help="Optional model override for this call.")
     parser.add_argument("--reasoning-effort", default=None, help="Optional reasoning effort override for this call.")
 

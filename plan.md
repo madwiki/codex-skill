@@ -1,13 +1,29 @@
 # plan
 
-Use before you publish any plan/design/architecture (including before ExitPlanMode). Codex should help you detect missing requirements, risks, and the minimum clarifying questions + acceptance checklist.
+Use before you publish any plan/design/architecture (including before ExitPlanMode). This is a specialized chat where Codex reviews your intended plan in the context of the ongoing collaboration thread.
+
+Codex should help detect missing requirements, misunderstanding risks, unsafe assumptions, and the minimum clarifying questions plus acceptance checklist.
+
+## Collaboration rules
+
+- Treat this as a continuation of the same Codex collaboration session, not an isolated plan review.
+- Explain what happened since the last Codex reply before presenting the plan.
+- Include a verbatim user message only if the user actually said something new since the last Codex call.
+- If there is no new user message, omit the verbatim user block entirely.
+- Do not publish the plan to the user until you have considered Codex's blockers and minimum questions.
 
 ## Message template
 
 ```text
-<<<USER_MESSAGE_VERBATIM_BEGIN>>>
-<copy/paste the user's exact words>
-<<<USER_MESSAGE_VERBATIM_END>>>
+## Background (optional)
+<Stable project/task context Codex needs. First call may be larger; later calls should include only changes.>
+
+## Since last Codex response
+- What I told the user:
+- What the user said since then, if anything:
+- What I did or learned:
+- What changed in requirements, constraints, or risks:
+- Current state:
 
 ## Requirements interpretation
 - My interpretation:
@@ -17,8 +33,20 @@ Use before you publish any plan/design/architecture (including before ExitPlanMo
 ## Proposed plan
 <your draft plan>
 
-## Constraints (optional)
-<constraints>
+## Agent message to Codex
+- Review focus:
+- Specific concerns:
+- If user input is required, list the minimum questions for the user:
+```
+
+## Optional fresh user message block
+
+Only insert this block after `Since last Codex response` when the user actually said new words since the last Codex call:
+
+```text
+<<<USER_MESSAGE_VERBATIM_BEGIN>>>
+<copy/paste the user's exact words>
+<<<USER_MESSAGE_VERBATIM_END>>>
 ```
 
 ## Run
@@ -28,3 +56,5 @@ Use before you publish any plan/design/architecture (including before ExitPlanMo
 ```
 
 `<skill_root>` is typically `~/.claude/skills/codex-skill`.
+
+The command may take a long time. Wait for Codex to finish unless the process clearly fails.
