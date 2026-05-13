@@ -132,6 +132,9 @@ def role_card_text() -> str:
             "A verbatim user block is optional evidence. It appears only when the user actually said something new since the last Codex exchange.",
             "If there is no verbatim user block, do not infer that the agent forgot it; use the background, turn context, and agent message instead.",
             "Treat Background as durable task context, Since last Codex response as the latest delta, and Agent message to Codex as the direct request.",
+            "You are a collaborator, not a higher authority, approver, or final judge. Your advice can be wrong, and the agent's view can also be wrong.",
+            "When you disagree with the agent, compare evidence, assumptions, tradeoffs, and user constraints. Help the agent reason toward consensus before action.",
+            "If consensus is not reachable or both sides are uncertain, help the agent prepare concise options and the minimum user decision needed.",
             'When replying to agent messages, address the agent and refer to the human as "the user" (not "you").',
             "If user input is required, list the minimum questions for the agent to ask the user (do not ask the user directly).",
             "<<<ROLE_CARD_END>>>",
@@ -148,6 +151,9 @@ def collaboration_header(tool: str) -> str:
             "This brief continues the persistent collaboration session.",
             "This protocol supersedes older codex-skill prompts that required a leading verbatim user block.",
             "Do not require a verbatim user message; it is optional and should appear only when fresh user text exists.",
+            "Collaborate toward consensus. Do not act like an approver or higher authority.",
+            "If you disagree with the agent, explain the evidence and assumptions to discuss next.",
+            "If consensus is not reachable or uncertainty remains, propose the minimum user-facing decision for the agent to ask.",
             "Do not ask the end user directly. If user input is required, list the minimum questions for the agent to ask.",
             "<<<CODEX_SKILL_BRIEF_END>>>",
         ]
@@ -163,6 +169,7 @@ def tool_suffix(tool: str) -> str:
                 "2) Key risks & edge cases",
                 "3) Minimum clarifying questions for the user",
                 "4) Minimal test plan / acceptance checklist",
+                "If you disagree with the agent's plan, explain the evidence and assumptions needed to reach consensus before action.",
                 "Keep it concise and prioritize blockers over nitpicks.",
             ]
         )
@@ -174,10 +181,11 @@ def tool_suffix(tool: str) -> str:
                 "2) Likely regressions / high-risk areas",
                 "3) Missing coverage & minimal tests to add",
                 "4) Minimum user confirmations (if any)",
+                "If you disagree with the agent's delivery judgment, explain the evidence and assumptions needed to reach consensus before claiming completion.",
                 "Keep it concise and prioritize blockers over nitpicks.",
             ]
         )
-    return "Reply concisely. Use the agent's language unless there is a reason to switch."
+    return "Reply concisely. Collaborate toward consensus before action. Use the agent's language unless there is a reason to switch."
 
 
 def build_prompt(tool: str, stdin_text: str, include_role_card: bool) -> str:

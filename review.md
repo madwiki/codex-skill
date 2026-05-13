@@ -11,6 +11,8 @@ This is a specialized chat where Codex reviews the delivery against the ongoing 
 - Include a verbatim user message only if the user actually said something new since the last Codex call.
 - If there is no new user message, omit the verbatim user block entirely.
 - Do not say done or push delivery claims to the user until you have considered Codex's blockers.
+- Treat Codex's review as collaboration, not approval. Resolve disagreements by discussing evidence and assumptions before delivery.
+- If you and Codex cannot reach consensus, ask the user to decide before claiming the work is done.
 
 ## Message template
 
@@ -37,6 +39,7 @@ This is a specialized chat where Codex reviews the delivery against the ongoing 
 ## Agent message to Codex
 - Review focus:
 - Known risks:
+- Where I agree/disagree with Codex so far:
 - Open questions or minimum user confirmations:
 ```
 

@@ -11,6 +11,8 @@ Codex should help detect missing requirements, misunderstanding risks, unsafe as
 - Include a verbatim user message only if the user actually said something new since the last Codex call.
 - If there is no new user message, omit the verbatim user block entirely.
 - Do not publish the plan to the user until you have considered Codex's blockers and minimum questions.
+- Treat Codex's review as collaboration, not approval. Resolve disagreements by discussing evidence and assumptions before presenting the plan.
+- If you and Codex cannot reach consensus, ask the user to choose between the smallest useful set of options before moving forward.
 
 ## Message template
 
@@ -36,6 +38,7 @@ Codex should help detect missing requirements, misunderstanding risks, unsafe as
 ## Agent message to Codex
 - Review focus:
 - Specific concerns:
+- Where I agree/disagree with Codex so far:
 - If user input is required, list the minimum questions for the user:
 ```
 

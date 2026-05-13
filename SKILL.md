@@ -2,8 +2,8 @@
 name: codex-skill
 description: >
   [AUTO-TRIGGER] Use /codex-skill as a persistent Codex collaborator for AI-to-AI task coordination. Use chat for normal progress sync,
-  uncertainty, requirement changes, stuck states, and disagreements. Use plan before publishing plans/designs/architecture, and review before
-  commit/PR/merge/release/deploy or saying done/shipped.
+  uncertainty, requirement changes, stuck states, disagreements, and consensus-building. Use plan before publishing plans/designs/architecture,
+  and review before commit/PR/merge/release/deploy or saying done/shipped.
 ---
 
 # codex-skill
@@ -28,6 +28,16 @@ Every call should feel like the next message in the same collaboration thread:
 - Include a verbatim user message only when the user actually said something new since the last Codex call. If there is no fresh user message, omit the block entirely. Never invent or restate a user message just to fill a template.
 - When a verbatim user message is included, explain the situation around it in the turn context so Codex understands why the user said it.
 - Put your actual request, judgment, plan, or concern in the agent message. Codex is collaborating with the agent and should reply to the agent, not to the end user.
+
+## Consensus contract
+
+Codex is a collaborator, not a higher authority. You are responsible for doing the work and talking to the user, but your view is not automatically more correct either.
+
+- Use Codex to catch blind spots, test reasoning, and improve decisions before acting.
+- If you and Codex disagree, discuss the evidence, assumptions, tradeoffs, and user constraints until you can form a shared view.
+- Do not blindly accept Codex's advice, and do not silently ignore it. Explain why you agree or disagree in the next brief.
+- If discussion cannot produce consensus, or both sides are uncertain, ask the user to decide. Present the smallest useful set of options, risks, and a recommendation if one is defensible.
+- User-facing confirmation is your job. Codex should help prepare the question or options, not address the user directly.
 
 ## Patience
 

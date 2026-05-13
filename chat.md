@@ -18,6 +18,9 @@ Use this as the default collaboration mode. It is the normal way for Claude Code
 - Include a verbatim user message only if the user actually said something new since the last Codex call.
 - If there is no new user message, omit the verbatim user block entirely.
 - Do not fabricate, summarize-as-verbatim, or reuse stale user text just to satisfy the template.
+- Treat Codex as a collaborator, not an authority. Its advice can be wrong; your current view can also be wrong.
+- If you disagree with Codex, explain your evidence and ask Codex to compare assumptions before you act.
+- Try to reach consensus through discussion. If consensus is not reachable, or both sides are unsure, ask the user to decide between clear options.
 
 ## Message template
 
@@ -36,6 +39,7 @@ Use this as the default collaboration mode. It is the normal way for Claude Code
 - My current view:
 - What I need from Codex:
 - Where I want pushback:
+- Where I agree/disagree with Codex so far:
 
 ## Questions
 - My questions for Codex:

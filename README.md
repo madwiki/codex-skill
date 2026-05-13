@@ -17,6 +17,7 @@ git clone https://github.com/madwiki/codex-skill ~/.claude/skills/codex-skill
 - Automatically persists and reuses the Codex session id via `<repo>/.claude/codex_session.json`
 - Treats `chat` as the normal collaboration path; `plan` and `review` are specialized chat modes
 - Lets Claude Code brief Codex with background, since-last context, optional fresh user messages, and the current agent request
+- Frames Codex as a collaborator, not an authority; disagreements should be discussed toward consensus before action
 - Uses a 3600-second default timeout because Codex may need to inspect files, reason, compact, or resume context
 
 ## Use
