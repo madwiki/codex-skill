@@ -18,6 +18,7 @@ Codex owns mutation for this step. Codex should perform only the approved step, 
 - Include stopping conditions and anything Codex must not touch.
 - Codex must not continue into the next feature/stage after finishing the approved step.
 - Codex must not commit, push, release, deploy, or perform external-state actions unless this exact call explicitly authorizes that action.
+- Codex must self-check facts and whole-system coherence before reporting the step complete.
 - After Codex responds, Claude reviews independently by reading/searching/verifying before approving the next step.
 
 ## Message template
@@ -48,12 +49,14 @@ Codex may mutate only the approved step below.
 - Files/modules likely involved:
 - Do not touch:
 - Required self-check:
+- Required fact-check / coherence check:
 - Stop condition:
 
 ## Claude message to Codex
 - Execute only this step:
 - Report changed files/state:
 - Report evidence, tests, and self-review:
+- Report fact-check and whole-system coherence findings:
 - Stop and wait for Claude review:
 ```
 

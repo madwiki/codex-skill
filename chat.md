@@ -25,6 +25,7 @@ If Codex prepared a plan and Claude disagrees, use `chat`. Do not move to mutati
 - Do not fabricate, summarize-as-verbatim, or reuse stale user text to satisfy a template.
 - Treat Codex as a peer collaborator, not an authority. Codex can be wrong; Claude can be wrong.
 - Use read-only investigation and concrete evidence to test both agents' claims.
+- In review or disagreement, check both facts and whole-system coherence. Do not accept the other agent's framing just to move forward.
 - Chat is not the normal place for state-changing work. Prefer the dedicated mutation-owner entrypoint once consensus exists.
 
 ## Message template
@@ -60,6 +61,38 @@ If Codex prepared a plan and Claude disagrees, use `chat`. Do not move to mutati
 
 If there is no fresh user message, remove the entire `Optional fresh user message` section.
 
+## New task kickoff template
+
+Use this once when a new user task begins in an existing Codex session:
+
+```text
+## Background
+Claude is starting a new user task and has reloaded codex-skill.
+
+## Current turn context
+- Durable memory/CLAUDE.md reload + recovery-sync + subtask-guide rule checked or updated:
+- User goal:
+- Hard constraints:
+- Relevant repository/system context:
+- What Claude has verified so far:
+
+## Optional fresh user message
+<<<USER_MESSAGE_VERBATIM_BEGIN>>>
+<copy/paste the user's exact words only when fresh user text exists>
+<<<USER_MESSAGE_VERBATIM_END>>>
+
+## Claude message to Codex
+This is the first Codex collaboration turn for this user task. Please re-apply the peer collaboration protocol: Claude and Codex are peers in judgment; mutation ownership only says who may change state; both agents must personally fact-check important claims and review whole-system coherence instead of accepting the other agent's framing uncritically.
+
+Please help establish:
+- Requirements interpretation:
+- Important assumptions and unknowns:
+- Affected system areas to inspect:
+- Whether Claude-mutates or Codex-mutates should own state-changing work:
+- Risks, consistency concerns, and user decisions needed:
+- If consensus cannot be reached, what Claude should ask the user:
+```
+
 ## Recovery sync template
 
 Use this immediately after compaction, context reset, model restart, or memory recovery:
@@ -74,7 +107,7 @@ Claude just recovered from compaction, context reset, model restart, or memory r
 - What repository state Claude has verified so far:
 
 ## Claude message to Codex
-This is the first recovery sync after Claude compaction, context reset, model restart, or memory recovery. Please re-apply the peer collaboration protocol: Claude and Codex are peers in judgment; mutation ownership only says who may change state; use read-only evidence and pushback instead of accepting Claude's recovered framing uncritically.
+This is the first recovery sync after Claude compaction, context reset, model restart, or memory recovery. Please re-apply the peer collaboration protocol: Claude and Codex are peers in judgment; mutation ownership only says who may change state; both agents must personally fact-check important claims and review whole-system coherence instead of accepting the other agent's framing uncritically.
 
 Please reconstruct the current collaboration state from your persistent session:
 - Current user goal and hard constraints:
@@ -84,6 +117,7 @@ Please reconstruct the current collaboration state from your persistent session:
 - Pending review findings:
 - Next proposed step and stop condition:
 - Known risks, uncertain assumptions, and user decisions still needed:
+- If consensus cannot be reached, what Claude should ask the user:
 
 I will compare your reconstruction against my recovered context and the repository before acting.
 ```

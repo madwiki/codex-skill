@@ -22,6 +22,7 @@ git clone https://github.com/madwiki/codex-skill ~/.claude/skills/codex-skill
   - Codex-mutates: Codex changes state in small approved steps; Claude reviews between steps
 - Makes fresh user messages optional. Include a verbatim user block only when the user actually said something new since the last Codex call.
 - Frames Claude and Codex as peer reviewers of the same user goal, not as leader/subordinate or approver/implementer.
+- Requires review stages to include direct fact-checking and whole-system coherence checks instead of trusting the other agent's summary.
 - Uses a 3600-second default timeout because Codex may inspect files, reason, compact, or resume context.
 
 ## Entrypoints

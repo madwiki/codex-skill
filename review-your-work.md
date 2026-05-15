@@ -18,6 +18,7 @@ This call is for review discussion, not mutation. Codex should answer with evide
 - State clearly that the current mode is Codex-mutates, review/discussion phase.
 - Include Claude's independent review evidence, not only impressions.
 - Codex should not mutate state in this call.
+- Codex should respond with its own fact-checking and whole-system coherence analysis, not only defend its prior work.
 - If a repair is needed, Codex proposes the next small mutation step for Claude to approve.
 - If disagreement remains or both agents are unsure, Claude asks the user to decide.
 
@@ -48,11 +49,14 @@ Codex must not mutate state in this call.
 - Confirmed correct:
 - Concerns / suspected issues:
 - Evidence:
+- Fact-check findings:
+- Whole-system coherence findings:
 - Questions:
 
 ## Claude message to Codex
 - Respond to this review:
 - Explain agreements/disagreements with evidence:
+- Identify any facts or coherence checks that still need direct verification:
 - Propose the smallest next repair or continuation step if needed:
 - Say whether user escalation is needed:
 ```

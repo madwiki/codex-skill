@@ -17,6 +17,7 @@ Codex will own future mutation, but this call is planning only. Codex may do rea
 - State clearly that the current mode is Codex-mutates, planning phase.
 - Ask Codex to inspect relevant code before proposing risky steps.
 - Codex should propose a plan plus the first small mutation step, then wait.
+- Codex should identify fact-check targets and whole-system coherence risks before proposing mutation.
 - If Claude disagrees with the plan, use `chat.md`. Do not approve mutation until consensus or user escalation.
 
 ## Message template
@@ -50,6 +51,8 @@ Codex may read/search/inspect but must not mutate state in this call.
 ## Claude message to Codex
 - Please prepare the implementation plan:
 - Code areas worth inspecting:
+- Facts to check:
+- Whole-system coherence risks:
 - Where I want pushback:
 - What counts as the first small mutation step:
 - Minimum user decision if consensus cannot be reached:

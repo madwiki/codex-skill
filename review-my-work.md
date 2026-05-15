@@ -18,6 +18,7 @@ Claude owns mutation. Codex reviews Claude's work, may do read-only investigatio
 - State clearly that the current mode is Claude-mutates.
 - Include enough evidence for Codex to review independently: changed files, test results, known risks, and unresolved assumptions.
 - Ask Codex to read/search/inspect when needed and to look for holes rather than rubber-stamp the result.
+- Ask Codex to personally fact-check important claims and review whole-system coherence across affected code, tests, docs, prompts, memory, and artifacts.
 - If Claude disagrees with Codex's findings, switch to `chat.md` and discuss evidence until consensus or user escalation.
 
 ## Message template
@@ -52,6 +53,8 @@ Codex may read/search/inspect but must not mutate state.
 
 ## Claude message to Codex
 - Review focus:
+- Facts I want independently checked:
+- Whole-system coherence concerns:
 - Where I want pushback:
 - Where I agree/disagree with Codex so far:
 - Minimum user decision if consensus cannot be reached:

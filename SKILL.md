@@ -4,7 +4,7 @@ description: >
   Every Claude Code startup, restart, compaction, context reset, or memory recovery must load /codex-skill before continuing collaborative coding work.
   On load, first verify durable memory or CLAUDE.md contains the reload rule, Codex recovery-sync rule, and instruction to load subtask guide MD files only when needed; add or update it if missing.
   Use /codex-skill to coordinate with a persistent Codex peer collaborator for context sync, disagreements, consensus-building,
-  user-facing decision preparation, and Claude-mutates or Codex-mutates workflows.
+  new-task kickoff, user-facing decision preparation, and Claude-mutates or Codex-mutates workflows.
 ---
 
 # codex-skill
@@ -39,6 +39,10 @@ Ask Codex to reconstruct:
 
 Compare Codex's answer against Claude's recovered context and the repository state before acting. If the two agents cannot reconcile the state, use `chat.md` to narrow the disagreement; if uncertainty still affects the next action, Claude asks the user.
 
+## New task kickoff
+
+When a new user task begins in an existing Codex session, use `chat.md` before choosing a mutation-owner workflow. Brief Codex on the new task and restate the peer review discipline once. Do not repeat the full charter in every later turn unless recovery is needed.
+
 ## Core model
 
 Claude and Codex are peers in judgment. The modes below define only **mutation ownership**: which agent is allowed to perform state-changing work in the workspace or external systems.
@@ -49,13 +53,19 @@ Both agents may do read-only investigation in any mode: read files, search the r
 
 Do not repeat the full peer-collaboration charter in every ordinary Codex call. Establish it when Claude loads this skill and when the Codex session is initialized; after compaction, context reset, model restart, or memory recovery, restate it once in the first recovery-sync chat, then continue with concise task-specific briefs.
 
-## Consensus discipline
+## Review and consensus discipline
 
 - Discuss before state-changing work until the plan and next step are clear enough that both agents can support it.
 - Review rigorously. Each agent should look for requirement gaps, hallucinated assumptions, regressions, edge cases, and weak evidence. Pushback is for better information and a better result, not for winning.
+- During review, personally fact-check important claims using read-only investigation when possible. Do not accept the other agent's summary as evidence.
+- Review the coherence of the whole affected system, not only the other agent's task slice. Check whether code, tests, docs, prompts, durable memory/`CLAUDE.md`, generated artifacts, and workflow instructions still fit together without contradictions.
+- When the task changes this skill, treat the whole skill as the affected system: check `SKILL.md`, guide files, CLI prompt generation, wrapper scripts, README, command names, and generated prompt text for consistency.
+- The mutation owner must self-check with the same fact-checking and coherence standards before asking the other agent to review.
 - Do not blindly accept Codex, and do not silently ignore Codex. If you disagree, use `chat.md` to compare evidence, assumptions, tradeoffs, and user constraints.
-- If Codex prepares a plan and Claude disagrees, use `chat.md`. Do not proceed to mutation until consensus is reached or the user decides.
-- If consensus cannot be reached, or both agents are unsure, Claude asks the user. Present the smallest useful set of options, risks, and a recommendation when one is defensible.
+- If either agent believes the other is wrong, it should try to persuade with evidence and concrete reasoning. Do not concede just to move the workflow forward.
+- If Codex prepares a plan and Claude disagrees, use `chat.md`. Do not proceed to mutation until real consensus is reached or the user decides.
+- Consensus means both agents can defend the same next action from evidence. It is not a procedural compromise made only to move forward.
+- If consensus cannot be reached, or both agents are unsure, Claude asks the user. Either agent may request escalation, but Claude performs the user-facing question. Present the smallest useful set of options, risks, and a recommendation when one is defensible.
 
 ## Choose the workflow
 

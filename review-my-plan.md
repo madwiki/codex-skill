@@ -17,6 +17,7 @@ Claude owns mutation. Codex reviews Claude's intended plan, may do read-only inv
 - If this call follows compaction, context reset, model restart, or memory recovery, use `chat.md` for recovery sync before plan review.
 - State clearly that the current mode is Claude-mutates.
 - Ask Codex to check requirements, assumptions, affected code, risks, and tests.
+- Ask Codex to personally fact-check important claims and review whole-system coherence, not only the draft plan.
 - Treat Codex's response as peer review, not approval.
 - If Claude disagrees with Codex's review, switch to `chat.md` and discuss evidence until consensus or user escalation.
 
@@ -53,6 +54,8 @@ Codex may read/search/inspect but must not mutate state.
 ## Claude message to Codex
 - Review focus:
 - Specific concerns:
+- Facts I want independently checked:
+- Whole-system coherence concerns:
 - Where I want pushback:
 - Where I agree/disagree with Codex so far:
 - Minimum user decision if consensus cannot be reached:
