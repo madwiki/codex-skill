@@ -2,8 +2,10 @@
 name: codex-skill
 description: >
   [AUTO-TRIGGER] Use /codex-skill when Claude Code should collaborate with a persistent Codex session instead of working alone.
-  Always reload this skill after compaction or context reset. Use chat for normal context sync, disagreements, consensus-building,
-  and user-facing decision preparation. Choose Claude-mutates or Codex-mutates mode when any state-changing work is needed.
+  On every load, first run the persistence bootstrap: verify durable memory or CLAUDE.md says to reload this skill and ask Codex
+  for recovery sync after compaction/context reset, and add that reminder if missing. Use chat for context sync, disagreements,
+  consensus-building, and user-facing decision preparation.
+  Choose Claude-mutates or Codex-mutates mode when any state-changing work is needed.
 ---
 
 # codex-skill
@@ -12,11 +14,30 @@ This skill is for Claude Code. Claude invokes Codex as a persistent peer collabo
 
 Codex is invoked by Claude; Codex does not speak to the user directly. Claude remains responsible for user-facing conversation and for asking the user to decide unresolved issues. This does not make Claude's judgment higher than Codex's judgment.
 
-## Non-forgettable protocol
+## Persistence bootstrap
 
-After every compaction, context reset, model restart, or memory recovery, the first collaboration action is to reload this `codex-skill` before planning, mutating, reviewing, or declaring completion.
+This is the first required action every time this skill is loaded, before choosing `chat`, planning, mutating, reviewing, or declaring completion.
 
-Keep a durable reminder in project memory or `CLAUDE.md` when possible: after compact, reload `codex-skill`. If this protocol is lost, Claude may accidentally continue as a solo implementer, which violates the collaboration model.
+1. Check durable project memory and the nearest applicable `CLAUDE.md` for a concrete rule that says: after compaction, context reset, model restart, or memory recovery, Claude must reload `codex-skill` and ask Codex for a recovery sync before continuing the task.
+2. If the rule is missing, add or update the smallest durable reminder in project memory if available; otherwise update or create the nearest project `CLAUDE.md` allowed by workspace policy.
+3. The reminder should be concrete, for example: `After any compaction or context reset, reload codex-skill, then ask Codex for a recovery sync before planning, mutating, reviewing, or declaring completion. Claude and Codex must continue the collaboration protocol instead of working solo.`
+4. This bootstrap is a protocol-preservation write. It is allowed before selecting Claude-mutates or Codex-mutates mode, but it must be narrowly scoped to memory/`CLAUDE.md` and must not modify task files.
+5. If durable storage is ambiguous or workspace policy forbids the write, ask the user where to store the reminder before continuing collaborative work.
+
+## Post-compact recovery sync
+
+After any compaction, context reset, model restart, or memory recovery, do not continue from Claude's reconstructed memory alone. After the persistence bootstrap, use `chat.md` to ask the persistent Codex session where the collaboration currently stands.
+
+Ask Codex to reconstruct:
+
+- Current user goal and hard constraints.
+- Current mutation owner, if already chosen.
+- Last agreed plan or open disagreement.
+- Last completed step and evidence/tests.
+- Pending review findings, next proposed step, and stop condition.
+- Known risks, uncertain assumptions, and user decisions still needed.
+
+Compare Codex's answer against Claude's recovered context and the repository state before acting. If the two agents cannot reconcile the state, use `chat.md` to narrow the disagreement; if uncertainty still affects the next action, Claude asks the user.
 
 ## Core model
 
@@ -54,20 +75,22 @@ Legacy aliases remain available for older habits:
 
 ## Codex-mutates loop
 
-1. Use `chat.md` until the broad direction is understood.
-2. Use `request-plan.md` for Codex to propose a plan and the first small mutation step.
-3. If Claude disagrees with the plan, use `chat.md` to resolve the disagreement or prepare a user decision.
-4. Once there is consensus, use `request-mutation.md` for exactly one approved step.
-5. Claude reviews independently by reading/searching/verifying. Use `review-your-work.md` to send review findings to Codex.
-6. Repeat small steps. Codex must stop after each step for Claude review.
+1. After any compaction or context reset, run the post-compact recovery sync first.
+2. Use `chat.md` until the broad direction is understood.
+3. Use `request-plan.md` for Codex to propose a plan and the first small mutation step.
+4. If Claude disagrees with the plan, use `chat.md` to resolve the disagreement or prepare a user decision.
+5. Once there is consensus, use `request-mutation.md` for exactly one approved step.
+6. Claude reviews independently by reading/searching/verifying. Use `review-your-work.md` to send review findings to Codex.
+7. Repeat small steps. Codex must stop after each step for Claude review.
 
 ## Claude-mutates loop
 
-1. Use `chat.md` until the broad direction is understood.
-2. Use `review-my-plan.md` before Claude performs meaningful state-changing work.
-3. If Codex disagrees, use `chat.md` to resolve the disagreement or prepare a user decision.
-4. Claude performs the agreed mutation step and self-checks.
-5. Use `review-my-work.md` before final delivery or before any commit/PR/merge/release/deploy claim.
+1. After any compaction or context reset, run the post-compact recovery sync first.
+2. Use `chat.md` until the broad direction is understood.
+3. Use `review-my-plan.md` before Claude performs meaningful state-changing work.
+4. If Codex disagrees, use `chat.md` to resolve the disagreement or prepare a user decision.
+5. Claude performs the agreed mutation step and self-checks.
+6. Use `review-my-work.md` before final delivery or before any commit/PR/merge/release/deploy claim.
 
 ## Message continuity
 

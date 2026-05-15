@@ -17,7 +17,8 @@ If Codex prepared a plan and Claude disagrees, use `chat`. Do not move to mutati
 ## Collaboration rules
 
 - Treat each message as a continuation of the same Codex collaboration session.
-- Reload `codex-skill` first after compaction or context reset.
+- Run the persistence bootstrap in `SKILL.md` first: verify durable memory/`CLAUDE.md` contains the reload rule, and add it if missing.
+- After compaction or context reset, use chat as a recovery sync before any plan, mutation, review, or completion claim.
 - Include what happened since the last Codex reply, including what Claude told the user when it affects the current state.
 - Include a verbatim user message only if the user actually said something new since the last Codex call.
 - If there is no new user message, omit the verbatim user block entirely.
@@ -58,6 +59,32 @@ If Codex prepared a plan and Claude disagrees, use `chat`. Do not move to mutati
 ```
 
 If there is no fresh user message, remove the entire `Optional fresh user message` section.
+
+## Post-compact recovery template
+
+Use this immediately after compaction, context reset, model restart, or memory recovery:
+
+```text
+## Background
+Claude just recovered from compaction/context reset and reloaded codex-skill.
+
+## Current turn context
+- Durable memory/CLAUDE.md reload rule checked or updated:
+- What Claude currently remembers:
+- What repository state Claude has verified so far:
+
+## Claude message to Codex
+Please reconstruct the current collaboration state from your persistent session:
+- Current user goal and hard constraints:
+- Current mutation owner, if chosen:
+- Last agreed plan or unresolved disagreement:
+- Last completed step and evidence/tests:
+- Pending review findings:
+- Next proposed step and stop condition:
+- Known risks, uncertain assumptions, and user decisions still needed:
+
+I will compare your reconstruction against my recovered context and the repository before acting.
+```
 
 ## Run
 

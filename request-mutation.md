@@ -12,7 +12,8 @@ Codex owns mutation for this step. Codex should perform only the approved step, 
 
 ## Collaboration rules
 
-- Reload `codex-skill` first after compaction or context reset.
+- Run the persistence bootstrap in `SKILL.md` first: verify durable memory/`CLAUDE.md` contains the reload rule, and add it if missing.
+- If this call follows compaction or context reset, use `chat.md` for post-compact recovery sync before authorizing mutation.
 - State clearly that the current mode is Codex-mutates and name the single approved step.
 - Include stopping conditions and anything Codex must not touch.
 - Codex must not continue into the next feature/stage after finishing the approved step.

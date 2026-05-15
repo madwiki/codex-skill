@@ -13,7 +13,8 @@ This call is for review discussion, not mutation. Codex should answer with evide
 
 ## Collaboration rules
 
-- Reload `codex-skill` first after compaction or context reset.
+- Run the persistence bootstrap in `SKILL.md` first: verify durable memory/`CLAUDE.md` contains the reload rule, and add it if missing.
+- If this call follows compaction or context reset, use `chat.md` for post-compact recovery sync before reviewing Codex's prior work.
 - State clearly that the current mode is Codex-mutates, review/discussion phase.
 - Include Claude's independent review evidence, not only impressions.
 - Codex should not mutate state in this call.

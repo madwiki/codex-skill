@@ -13,7 +13,8 @@ Claude owns mutation. Codex reviews Claude's intended plan, may do read-only inv
 
 ## Collaboration rules
 
-- Reload `codex-skill` first after compaction or context reset.
+- Run the persistence bootstrap in `SKILL.md` first: verify durable memory/`CLAUDE.md` contains the reload rule, and add it if missing.
+- If this call follows compaction or context reset, use `chat.md` for post-compact recovery sync before plan review.
 - State clearly that the current mode is Claude-mutates.
 - Ask Codex to check requirements, assumptions, affected code, risks, and tests.
 - Treat Codex's response as peer review, not approval.

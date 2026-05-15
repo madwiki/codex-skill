@@ -12,7 +12,8 @@ Codex will own future mutation, but this call is planning only. Codex may do rea
 
 ## Collaboration rules
 
-- Reload `codex-skill` first after compaction or context reset.
+- Run the persistence bootstrap in `SKILL.md` first: verify durable memory/`CLAUDE.md` contains the reload rule, and add it if missing.
+- If this call follows compaction or context reset, use `chat.md` for post-compact recovery sync before requesting a plan.
 - State clearly that the current mode is Codex-mutates, planning phase.
 - Ask Codex to inspect relevant code before proposing risky steps.
 - Codex should propose a plan plus the first small mutation step, then wait.

@@ -14,6 +14,8 @@ git clone https://github.com/madwiki/codex-skill ~/.claude/skills/codex-skill
 ## What it does
 
 - Persists and reuses the Codex session id via `<repo>/.claude/codex_session.json`
+- Requires a persistence bootstrap on skill load: verify durable memory/`CLAUDE.md` contains the post-compaction reload and Codex recovery-sync rule, and add it if missing
+- Requires a post-compact recovery chat: ask Codex to reconstruct current goal, mutation owner, last agreed plan, last completed step, pending review, next step, and risks before continuing
 - Treats `chat` as the shared collaboration path for context sync, disagreements, and consensus-building
 - Supports two mutation-owner workflows:
   - Claude-mutates: Claude changes state; Codex reviews Claude's plan/work
