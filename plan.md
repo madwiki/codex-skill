@@ -1,63 +1,17 @@
 # plan
 
-Use before you publish any plan/design/architecture (including before ExitPlanMode). This is a specialized chat where Codex reviews your intended plan in the context of the ongoing collaboration thread.
+Legacy alias for `review-my-plan.md`.
 
-Codex should help detect missing requirements, misunderstanding risks, unsafe assumptions, and the minimum clarifying questions plus acceptance checklist.
+Use this only when older instructions or habits say `plan`. It means **Claude-mutates** mode: Claude owns state-changing work, and Codex reviews Claude's plan without mutating state.
 
-## Collaboration rules
+For the current workflow, read `review-my-plan.md` and run:
 
-- Treat this as a continuation of the same Codex collaboration session, not an isolated plan review.
-- Explain what happened since the last Codex reply before presenting the plan.
-- Include a verbatim user message only if the user actually said something new since the last Codex call.
-- If there is no new user message, omit the verbatim user block entirely.
-- Do not publish the plan to the user until you have considered Codex's blockers and minimum questions.
-- Treat Codex's review as collaboration, not approval. Resolve disagreements by discussing evidence and assumptions before presenting the plan.
-- If you and Codex cannot reach consensus, ask the user to choose between the smallest useful set of options before moving forward.
-
-## Message template
-
-```text
-## Background (optional)
-<Stable project/task context Codex needs. First call may be larger; later calls should include only changes.>
-
-## Since last Codex response
-- What I told the user:
-- What the user said since then, if anything:
-- What I did or learned:
-- What changed in requirements, constraints, or risks:
-- Current state:
-
-## Requirements interpretation
-- My interpretation:
-- Assumptions:
-- Non-goals:
-
-## Proposed plan
-<your draft plan>
-
-## Agent message to Codex
-- Review focus:
-- Specific concerns:
-- Where I agree/disagree with Codex so far:
-- If user input is required, list the minimum questions for the user:
+```bash
+<skill_root>/bin/codex-skill-review-my-plan < message.txt
 ```
 
-## Optional fresh user message block
-
-Only insert this block after `Since last Codex response` when the user actually said new words since the last Codex call:
-
-```text
-<<<USER_MESSAGE_VERBATIM_BEGIN>>>
-<copy/paste the user's exact words>
-<<<USER_MESSAGE_VERBATIM_END>>>
-```
-
-## Run
+Compatibility command:
 
 ```bash
 <skill_root>/bin/codex-skill-plan < message.txt
 ```
-
-`<skill_root>` is typically `~/.claude/skills/codex-skill`.
-
-The command may take a long time. Wait for Codex to finish unless the process clearly fails.

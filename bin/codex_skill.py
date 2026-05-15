@@ -10,7 +10,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Iterator, Optional, Tuple
 
 
 CODEX_BIN = os.environ.get("CODEX_BIN", "codex")
@@ -20,6 +20,22 @@ DEFAULT_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT")
 
 VERBATIM_BEGIN = "<<<USER_MESSAGE_VERBATIM_BEGIN>>>"
 VERBATIM_END = "<<<USER_MESSAGE_VERBATIM_END>>>"
+
+TOOL_ALIASES = {
+    "plan": "review-my-plan",
+    "review": "review-my-work",
+}
+
+TOOL_HELP = {
+    "chat": "Shared discussion / context sync / disagreement resolution (reads stdin).",
+    "review-my-plan": "Claude-mutates mode: Codex reviews Claude's plan without mutating state.",
+    "review-my-work": "Claude-mutates mode: Codex reviews Claude's work without mutating state.",
+    "request-plan": "Codex-mutates mode: Codex proposes a plan without mutating state.",
+    "request-mutation": "Codex-mutates mode: Codex performs one agreed mutation step, then stops.",
+    "review-your-work": "Codex-mutates mode: Claude reviews Codex's work and asks Codex to respond.",
+    "plan": "Legacy alias for review-my-plan.",
+    "review": "Legacy alias for review-my-work.",
+}
 
 
 def eprint(*args: object) -> None:
@@ -122,58 +138,115 @@ def normalize_agent_brief(stdin_text: str) -> str:
     return stripped + "\n"
 
 
+def canonical_tool(tool: str) -> str:
+    return TOOL_ALIASES.get(tool, tool)
+
+
 def role_card_text() -> str:
     return "\n".join(
         [
             "<<<ROLE_CARD_BEGIN>>>",
-            "This is a persistent collaboration session between Codex and an AI coding agent.",
-            "The agent will periodically brief you with durable background, what happened since your last reply, optional verbatim user messages, and the agent's current request.",
+            "This is a persistent collaboration session between Codex and Claude Code.",
+            "Claude Code is the skill user and invokes Codex through codex-skill. Codex replies to Claude Code, not directly to the human user.",
+            "The agents share one user goal and should supervise each other's reasoning, evidence, and discipline.",
             "Treat every message as the next turn in the same collaboration thread, not as an isolated one-shot question.",
+            "Claude should brief you with durable background, current turn context, optional verbatim user messages, and Claude's direct message to Codex.",
             "A verbatim user block is optional evidence. It appears only when the user actually said something new since the last Codex exchange.",
-            "If there is no verbatim user block, do not infer that the agent forgot it; use the background, turn context, and agent message instead.",
-            "Treat Background as durable task context, Since last Codex response as the latest delta, and Agent message to Codex as the direct request.",
-            "You are a collaborator, not a higher authority, approver, or final judge. Your advice can be wrong, and the agent's view can also be wrong.",
-            "When you disagree with the agent, compare evidence, assumptions, tradeoffs, and user constraints. Help the agent reason toward consensus before action.",
-            "If consensus is not reachable or both sides are uncertain, help the agent prepare concise options and the minimum user decision needed.",
-            'When replying to agent messages, address the agent and refer to the human as "the user" (not "you").',
-            "If user input is required, list the minimum questions for the agent to ask the user (do not ask the user directly).",
+            "If there is no verbatim user block, do not infer that Claude forgot it; use the background, current turn context, and Claude's direct message instead.",
+            "Treat Background as durable task context, Current turn context as the latest delta, and Claude message to Codex as the direct request.",
+            "You are a collaborator, not a higher authority, approver, subordinate, or final judge. Your advice can be wrong, and Claude's view can also be wrong.",
+            "The work modes define mutation ownership only: which agent may perform state-changing actions. They do not define whose judgment is more important.",
+            "Both agents should perform read-only investigation when useful: read files, search the codebase, inspect diffs, check docs, and verify claims instead of trusting summaries blindly.",
+            "Review with rigor. Actively look for requirement gaps, hallucinated assumptions, broken edge cases, regressions, and weak tests. Push back to improve the outcome, not to win an argument.",
+            "When you disagree with Claude, compare evidence, assumptions, tradeoffs, and user constraints. Help Claude reason toward consensus before state-changing action.",
+            "If consensus is not reachable or both sides are uncertain, help Claude prepare concise options and the minimum user decision needed.",
+            'When replying to Claude messages, address Claude and refer to the human as "the user" (not "you").',
+            "If user input is required, list the minimum questions for Claude to ask the user. Do not ask the user directly.",
+            "If Claude appears to have lost this collaboration protocol after compaction or context reset, remind Claude to reload codex-skill before continuing.",
             "<<<ROLE_CARD_END>>>",
         ]
     )
 
 
-def collaboration_header(tool: str) -> str:
+def mutation_policy_text(tool: str) -> str:
+    if tool == "request-mutation":
+        return "\n".join(
+            [
+                "Mutation ownership: Codex-mutates.",
+                "Codex may perform state-changing actions only for the single approved step described in Claude's brief.",
+                "Before mutating, verify the scope and assumptions from the repository when needed.",
+                "After that step, stop and report exactly what changed, what evidence/tests you used, and what should be reviewed next.",
+                "Do not continue into the next feature/stage. Do not commit, push, release, or deploy unless Claude's brief explicitly authorizes that exact action.",
+            ]
+        )
+    if tool == "request-plan":
+        return "\n".join(
+            [
+                "Mutation ownership: Codex-mutates, planning phase.",
+                "Codex must not mutate state or perform state-changing actions in this call.",
+                "Use read-only investigation as needed, then propose the plan and the first small mutation step for Claude to review.",
+            ]
+        )
+    if tool == "review-your-work":
+        return "\n".join(
+            [
+                "Mutation ownership: Codex-mutates, review/discussion phase.",
+                "Claude is reviewing Codex's prior work. Codex must not mutate state or perform state-changing actions in this call.",
+                "Respond to the review with evidence, agreements/disagreements, and the smallest next repair or continuation step if needed.",
+            ]
+        )
+    if tool in {"review-my-plan", "review-my-work"}:
+        return "\n".join(
+            [
+                "Mutation ownership: Claude-mutates.",
+                "Codex must not mutate state or perform state-changing actions in this call.",
+                "Codex may do read-only investigation and should review Claude's plan/work rigorously before Claude mutates or delivers.",
+            ]
+        )
+    return "\n".join(
+        [
+            "Mutation ownership: undecided/shared discussion.",
+            "Use this call for context sync, questions, disagreements, and consensus-building.",
+            "Do not perform state-changing actions in chat unless Claude's brief explicitly changes the mode and authorizes a narrow action; prefer the dedicated mutation entrypoint.",
+        ]
+    )
+
+
+def collaboration_header(invoked_tool: str) -> str:
+    tool = canonical_tool(invoked_tool)
     return "\n".join(
         [
             "<<<CODEX_SKILL_BRIEF_BEGIN>>>",
-            f"origin=codex-skill tool={tool}",
-            "You are speaking with an AI coding agent, not the end user.",
+            f"origin=codex-skill invoked_tool={invoked_tool} canonical_tool={tool}",
+            "You are speaking with Claude Code, not the end user.",
             "This brief continues the persistent collaboration session.",
             "This protocol supersedes older codex-skill prompts that required a leading verbatim user block.",
             "Do not require a verbatim user message; it is optional and should appear only when fresh user text exists.",
-            "Collaborate toward consensus. Do not act like an approver or higher authority.",
-            "If you disagree with the agent, explain the evidence and assumptions to discuss next.",
-            "If consensus is not reachable or uncertainty remains, propose the minimum user-facing decision for the agent to ask.",
-            "Do not ask the end user directly. If user input is required, list the minimum questions for the agent to ask.",
+            "Collaborate toward consensus. Do not act like an approver, subordinate, or higher authority.",
+            mutation_policy_text(tool),
+            "If you disagree with Claude, explain the evidence and assumptions to discuss next.",
+            "If consensus is not reachable or uncertainty remains, propose the minimum user-facing decision for Claude to ask.",
+            "Do not ask the end user directly. If user input is required, list the minimum questions for Claude to ask.",
             "<<<CODEX_SKILL_BRIEF_END>>>",
         ]
     )
 
 
-def tool_suffix(tool: str) -> str:
-    if tool == "plan":
+def tool_suffix(invoked_tool: str) -> str:
+    tool = canonical_tool(invoked_tool)
+    if tool == "review-my-plan":
         return "\n".join(
             [
                 "Please answer in 4 sections:",
-                "1) Missing requirements / misunderstanding risks",
-                "2) Key risks & edge cases",
-                "3) Minimum clarifying questions for the user",
-                "4) Minimal test plan / acceptance checklist",
-                "If you disagree with the agent's plan, explain the evidence and assumptions needed to reach consensus before action.",
+                "1) Requirements gaps / misunderstanding risks",
+                "2) Agreement and disagreement with Claude's plan",
+                "3) Code areas, edge cases, and verification evidence to inspect",
+                "4) Minimal user questions and acceptance checklist",
+                "If you disagree with the plan, explain the evidence and assumptions needed to reach consensus before any mutation.",
                 "Keep it concise and prioritize blockers over nitpicks.",
             ]
         )
-    if tool == "review":
+    if tool == "review-my-work":
         return "\n".join(
             [
                 "Please answer in 4 sections:",
@@ -181,11 +254,48 @@ def tool_suffix(tool: str) -> str:
                 "2) Likely regressions / high-risk areas",
                 "3) Missing coverage & minimal tests to add",
                 "4) Minimum user confirmations (if any)",
-                "If you disagree with the agent's delivery judgment, explain the evidence and assumptions needed to reach consensus before claiming completion.",
+                "If you disagree with Claude's delivery judgment, explain the evidence and assumptions needed to reach consensus before claiming completion.",
                 "Keep it concise and prioritize blockers over nitpicks.",
             ]
         )
-    return "Reply concisely. Collaborate toward consensus before action. Use the agent's language unless there is a reason to switch."
+    if tool == "request-plan":
+        return "\n".join(
+            [
+                "Please answer in 4 sections:",
+                "1) Requirements interpretation and assumptions",
+                "2) Proposed plan",
+                "3) Risks, code areas to inspect, and evidence needed",
+                "4) First small mutation step for Claude to approve",
+                "Do not mutate state in this call. If Claude disagrees with this plan, continue through chat until consensus or user escalation.",
+                "Keep it concise and prioritize decisions that affect implementation.",
+            ]
+        )
+    if tool == "request-mutation":
+        return "\n".join(
+            [
+                "Please answer in 4 sections:",
+                "1) Step performed",
+                "2) Files/state changed",
+                "3) Evidence, tests, and self-review",
+                "4) Stop point, remaining risks, and recommended next step",
+                "Perform only the approved mutation step, then stop for Claude review.",
+                "If the approved step is ambiguous or unsafe, do read-only investigation and ask Claude to resolve the ambiguity instead of mutating.",
+                "Keep it concise and include enough detail for Claude to review independently.",
+            ]
+        )
+    if tool == "review-your-work":
+        return "\n".join(
+            [
+                "Please answer in 4 sections:",
+                "1) Response to Claude's review",
+                "2) Agreements, disagreements, and evidence",
+                "3) Smallest next repair or continuation step",
+                "4) Whether user escalation is needed",
+                "Do not mutate state in this call. If a fix is needed, propose the next mutation step for Claude to approve.",
+                "Keep it concise and prioritize blockers over nitpicks.",
+            ]
+        )
+    return "Reply concisely. Collaborate toward consensus before state-changing action. Use Claude's language unless there is a reason to switch."
 
 
 def build_prompt(tool: str, stdin_text: str, include_role_card: bool) -> str:
@@ -406,9 +516,8 @@ def main() -> int:
     parser.add_argument("--reasoning-effort", default=None, help="Optional reasoning effort override for this call.")
 
     sub = parser.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("chat", help="General discussion / calibration (reads stdin).")
-    sub.add_parser("plan", help="Plan review (reads stdin).")
-    sub.add_parser("review", help="Final review (reads stdin).")
+    for name in TOOL_HELP:
+        sub.add_parser(name, help=TOOL_HELP[name])
 
     args = parser.parse_args()
 

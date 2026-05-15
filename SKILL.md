@@ -1,54 +1,90 @@
 ---
 name: codex-skill
 description: >
-  [AUTO-TRIGGER] Use /codex-skill as a persistent Codex collaborator for AI-to-AI task coordination. Use chat for normal progress sync,
-  uncertainty, requirement changes, stuck states, disagreements, and consensus-building. Use plan before publishing plans/designs/architecture,
-  and review before commit/PR/merge/release/deploy or saying done/shipped.
+  [AUTO-TRIGGER] Use /codex-skill when Claude Code should collaborate with a persistent Codex session instead of working alone.
+  Always reload this skill after compaction or context reset. Use chat for normal context sync, disagreements, consensus-building,
+  and user-facing decision preparation. Choose Claude-mutates or Codex-mutates mode when any state-changing work is needed.
 ---
 
 # codex-skill
 
-Use Codex as a persistent second agent, not as a one-shot checker. Claude Code keeps doing the work, but periodically briefs Codex so the two agents can maintain shared task state, challenge assumptions, and coordinate the next step.
+This skill is for Claude Code. Claude invokes Codex as a persistent peer collaborator so both agents can work toward the user's goal, challenge each other's assumptions, and avoid solo-agent blind spots.
 
-When you load this skill, decide which guide to read next.
+Codex is invoked by Claude; Codex does not speak to the user directly. Claude remains responsible for user-facing conversation and for asking the user to decide unresolved issues. This does not make Claude's judgment higher than Codex's judgment.
 
-## What to load next (progressive disclosure)
+## Non-forgettable protocol
 
-- Normal collaboration, status sync, uncertainty, requirement changes, stuck states, or disagreement → read `chat.md` (path: `<skill_root>/chat.md`)
-- Starting to draft or publish a plan/design/architecture (including before ExitPlanMode) → read `plan.md` (path: `<skill_root>/plan.md`)
-- About to finalize delivery (done/PR/commit/merge/release/deploy) → read `review.md` (path: `<skill_root>/review.md`)
-- If unsure → use `chat.md`
+After every compaction, context reset, model restart, or memory recovery, the first collaboration action is to reload this `codex-skill` before planning, mutating, reviewing, or declaring completion.
 
-## Continuity contract
+Keep a durable reminder in project memory or `CLAUDE.md` when possible: after compact, reload `codex-skill`. If this protocol is lost, Claude may accidentally continue as a solo implementer, which violates the collaboration model.
 
-Every call should feel like the next message in the same collaboration thread:
+## Core model
 
-- Tell Codex what happened since the last Codex reply: what you told the user, what the user said, what you did, what changed, and what you now believe.
-- Include `Background` only for stable task/project context. The first call may need more background; later calls should include only new or changed background.
-- Include a verbatim user message only when the user actually said something new since the last Codex call. If there is no fresh user message, omit the block entirely. Never invent or restate a user message just to fill a template.
-- When a verbatim user message is included, explain the situation around it in the turn context so Codex understands why the user said it.
-- Put your actual request, judgment, plan, or concern in the agent message. Codex is collaborating with the agent and should reply to the agent, not to the end user.
+Claude and Codex are peers in judgment. The modes below define only **mutation ownership**: which agent is allowed to perform state-changing work in the workspace or external systems.
 
-## Consensus contract
+State-changing work includes file edits, generated artifacts, write-formatters, dependency changes, migrations, commands that update snapshots/caches/databases/services, commits, pushes, releases, deploys, and any command that changes external state.
 
-Codex is a collaborator, not a higher authority. You are responsible for doing the work and talking to the user, but your view is not automatically more correct either.
+Both agents may do read-only investigation in any mode: read files, search the repository, inspect diffs, inspect docs, reason about tests, and verify claims. If a command might write or affect shared state, it belongs to the mutation owner for the current mode.
 
-- Use Codex to catch blind spots, test reasoning, and improve decisions before acting.
-- If you and Codex disagree, discuss the evidence, assumptions, tradeoffs, and user constraints until you can form a shared view.
-- Do not blindly accept Codex's advice, and do not silently ignore it. Explain why you agree or disagree in the next brief.
-- If discussion cannot produce consensus, or both sides are uncertain, ask the user to decide. Present the smallest useful set of options, risks, and a recommendation if one is defensible.
-- User-facing confirmation is your job. Codex should help prepare the question or options, not address the user directly.
+## Consensus discipline
+
+- Discuss before state-changing work until the plan and next step are clear enough that both agents can support it.
+- Review rigorously. Each agent should look for requirement gaps, hallucinated assumptions, regressions, edge cases, and weak evidence. Pushback is for better information and a better result, not for winning.
+- Do not blindly accept Codex, and do not silently ignore Codex. If you disagree, use `chat.md` to compare evidence, assumptions, tradeoffs, and user constraints.
+- If Codex prepares a plan and Claude disagrees, use `chat.md`. Do not proceed to mutation until consensus is reached or the user decides.
+- If consensus cannot be reached, or both agents are unsure, Claude asks the user. Present the smallest useful set of options, risks, and a recommendation when one is defensible.
+
+## Choose the workflow
+
+Use only one mutation owner for a task segment to avoid conflicting edits and process collisions.
+
+| Situation | Guide |
+| --- | --- |
+| Normal sync, requirement changes, uncertainty, stuck states, disagreements, or consensus-building | `chat.md` |
+| Claude will own state-changing work and wants Codex to review the plan before Claude mutates | `review-my-plan.md` |
+| Claude owned state-changing work and wants Codex to review before delivery, commit, PR, merge, release, deploy, or "done" | `review-my-work.md` |
+| Codex will own state-changing work and Claude wants Codex to prepare the plan | `request-plan.md` |
+| Codex will own state-changing work and Claude has approved one small mutation step | `request-mutation.md` |
+| Codex owned prior state-changing work and Claude wants Codex to respond to Claude's review | `review-your-work.md` |
+
+Legacy aliases remain available for older habits:
+
+- `plan.md` means `review-my-plan.md` (Claude-mutates).
+- `review.md` means `review-my-work.md` (Claude-mutates).
+
+## Codex-mutates loop
+
+1. Use `chat.md` until the broad direction is understood.
+2. Use `request-plan.md` for Codex to propose a plan and the first small mutation step.
+3. If Claude disagrees with the plan, use `chat.md` to resolve the disagreement or prepare a user decision.
+4. Once there is consensus, use `request-mutation.md` for exactly one approved step.
+5. Claude reviews independently by reading/searching/verifying. Use `review-your-work.md` to send review findings to Codex.
+6. Repeat small steps. Codex must stop after each step for Claude review.
+
+## Claude-mutates loop
+
+1. Use `chat.md` until the broad direction is understood.
+2. Use `review-my-plan.md` before Claude performs meaningful state-changing work.
+3. If Codex disagrees, use `chat.md` to resolve the disagreement or prepare a user decision.
+4. Claude performs the agreed mutation step and self-checks.
+5. Use `review-my-work.md` before final delivery or before any commit/PR/merge/release/deploy claim.
+
+## Message continuity
+
+Every Codex call should feel like the next message in the same collaboration thread:
+
+- Background is durable task/project context. The first call may need more; later calls should include only new or changed background.
+- Current turn context explains what happened since the last Codex reply: what Claude told the user, what the user said, what Claude did, what changed, and what Claude now believes.
+- Include verbatim user text only when the user actually said something new since the last Codex call. If there is no fresh user message, omit the block entirely.
+- When verbatim user text is included, explain why the user said it and what situation surrounded it.
+- Claude's direct message to Codex contains Claude's view, request, concerns, disagreements, and requested pushback.
 
 ## Patience
 
-The Codex side may need to inspect files, reason through a large context, or compact/resume its own session. Do not treat this as a short RPC-style call. The scripts use a long default timeout; wait patiently unless there is a real failure.
+Codex may inspect files, reason through a large context, compact/resume its own session, or run verification. Treat the command as a long-running collaboration turn, not a short RPC. The default timeout is intentionally broad.
 
 ## Paths
 
 - `<skill_root>` = the directory containing this `SKILL.md` (common: `~/.claude/skills/codex-skill`)
-- Guides:
-  - `<skill_root>/plan.md`
-  - `<skill_root>/review.md`
-  - `<skill_root>/chat.md`
-
-Follow the chosen guide. It contains the command path and the collaboration message template.
+- Guides live directly under `<skill_root>`.
+- Commands live under `<skill_root>/bin/`.

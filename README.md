@@ -1,6 +1,6 @@
 # codex-skill
 
-A Claude Skill that uses the local `codex` CLI as a persistent collaborator for Claude Code.
+A Claude Skill that lets Claude Code collaborate with a persistent local Codex session.
 
 ## Install
 
@@ -13,22 +13,44 @@ git clone https://github.com/madwiki/codex-skill ~/.claude/skills/codex-skill
 
 ## What it does
 
-- Provides three entrypoints: `chat`, `plan`, `review`
-- Automatically persists and reuses the Codex session id via `<repo>/.claude/codex_session.json`
-- Treats `chat` as the normal collaboration path; `plan` and `review` are specialized chat modes
-- Lets Claude Code brief Codex with background, since-last context, optional fresh user messages, and the current agent request
-- Frames Codex as a collaborator, not an authority; disagreements should be discussed toward consensus before action
-- Uses a 3600-second default timeout because Codex may need to inspect files, reason, compact, or resume context
+- Persists and reuses the Codex session id via `<repo>/.claude/codex_session.json`
+- Treats `chat` as the shared collaboration path for context sync, disagreements, and consensus-building
+- Supports two mutation-owner workflows:
+  - Claude-mutates: Claude changes state; Codex reviews Claude's plan/work
+  - Codex-mutates: Codex changes state in small approved steps; Claude reviews between steps
+- Makes fresh user messages optional. Include a verbatim user block only when the user actually said something new since the last Codex call.
+- Frames Claude and Codex as peer reviewers of the same user goal, not as leader/subordinate or approver/implementer.
+- Uses a 3600-second default timeout because Codex may inspect files, reason, compact, or resume context.
 
-## Use
+## Entrypoints
 
-- The skill can trigger automatically based on its `description` keywords.
-- If it doesn't trigger, explicitly say: "use the codex-skill skill".
-- Do not fabricate a user message. Include `<<<USER_MESSAGE_VERBATIM_BEGIN>>>` only when the user actually said something new since the last Codex call.
+Shared:
 
-Docs:
+- `bin/codex-skill-chat`
+
+Claude-mutates:
+
+- `bin/codex-skill-review-my-plan`
+- `bin/codex-skill-review-my-work`
+
+Codex-mutates:
+
+- `bin/codex-skill-request-plan`
+- `bin/codex-skill-request-mutation`
+- `bin/codex-skill-review-your-work`
+
+Legacy aliases:
+
+- `bin/codex-skill-plan` -> `review-my-plan`
+- `bin/codex-skill-review` -> `review-my-work`
+
+## Docs
 
 - `SKILL.md`
 - `chat.md`
-- `plan.md`
-- `review.md`
+- `review-my-plan.md`
+- `review-my-work.md`
+- `request-plan.md`
+- `request-mutation.md`
+- `review-your-work.md`
+- `plan.md` and `review.md` legacy aliases
