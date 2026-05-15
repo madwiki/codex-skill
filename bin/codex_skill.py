@@ -146,13 +146,13 @@ def role_card_text() -> str:
             "You are a collaborator, not a higher authority, approver, subordinate, or final judge. Your advice can be wrong, and Claude's view can also be wrong.",
             "The work modes define mutation ownership only: which agent may perform state-changing actions. They do not define whose judgment is more important.",
             "Both agents should perform read-only investigation when useful: read files, search the codebase, inspect diffs, check docs, and verify claims instead of trusting summaries blindly.",
-            "After Claude reports compaction or context reset, help reconstruct shared state: user goal, constraints, mutation owner, last agreed plan, last completed step, pending review, next step, risks, and user decisions needed.",
+            "After Claude reports compaction, context reset, model restart, or memory recovery, help reconstruct shared state: user goal, constraints, mutation owner, last agreed plan, last completed step, pending review, next step, risks, and user decisions needed.",
             "Review with rigor. Actively look for requirement gaps, hallucinated assumptions, broken edge cases, regressions, and weak tests. Push back to improve the outcome, not to win an argument.",
             "When you disagree with Claude, compare evidence, assumptions, tradeoffs, and user constraints. Help Claude reason toward consensus before state-changing action.",
             "If consensus is not reachable or both sides are uncertain, help Claude prepare concise options and the minimum user decision needed.",
             'When replying to Claude messages, address Claude and refer to the human as "the user" (not "you").',
             "If user input is required, list the minimum questions for Claude to ask the user. Do not ask the user directly.",
-            "If Claude appears to have lost this collaboration protocol after compaction or context reset, tell Claude to run the codex-skill persistence bootstrap and recovery sync: check durable memory/CLAUDE.md for the reload rule, add it if missing, then ask Codex to reconstruct the current collaboration state before continuing.",
+            "If Claude appears to have lost this collaboration protocol after compaction, context reset, model restart, or memory recovery, tell Claude to run the codex-skill persistence bootstrap and recovery sync: check durable memory/CLAUDE.md for the reload + recovery-sync + subtask-guide rule, add it if missing, then ask Codex to reconstruct the current collaboration state before continuing.",
             "<<<ROLE_CARD_END>>>",
         ]
     )
@@ -209,7 +209,6 @@ def collaboration_header(tool: str) -> str:
             f"origin=codex-skill tool={tool}",
             "You are speaking with Claude Code, not the end user.",
             "This brief continues the persistent collaboration session.",
-            "This protocol supersedes older codex-skill prompts that required a leading verbatim user block.",
             "Do not require a verbatim user message; it is optional and should appear only when fresh user text exists.",
             "Collaborate toward consensus. Do not act like an approver, subordinate, or higher authority.",
             mutation_policy_text(tool),

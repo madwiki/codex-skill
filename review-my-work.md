@@ -13,8 +13,8 @@ Claude owns mutation. Codex reviews Claude's work, may do read-only investigatio
 
 ## Collaboration rules
 
-- Run the persistence bootstrap in `SKILL.md` first: verify durable memory/`CLAUDE.md` contains the reload rule, and add it if missing.
-- If this call follows compaction or context reset, use `chat.md` for post-compact recovery sync before work review.
+- Run the persistence bootstrap in `SKILL.md` first: verify durable memory/`CLAUDE.md` contains the reload + recovery-sync + subtask-guide rule, and add it if missing.
+- If this call follows compaction, context reset, model restart, or memory recovery, use `chat.md` for recovery sync before work review.
 - State clearly that the current mode is Claude-mutates.
 - Include enough evidence for Codex to review independently: changed files, test results, known risks, and unresolved assumptions.
 - Ask Codex to read/search/inspect when needed and to look for holes rather than rubber-stamp the result.

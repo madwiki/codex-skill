@@ -17,8 +17,8 @@ If Codex prepared a plan and Claude disagrees, use `chat`. Do not move to mutati
 ## Collaboration rules
 
 - Treat each message as a continuation of the same Codex collaboration session.
-- Run the persistence bootstrap in `SKILL.md` first: verify durable memory/`CLAUDE.md` contains the reload rule, and add it if missing.
-- After compaction or context reset, use chat as a recovery sync before any plan, mutation, review, or completion claim.
+- Run the persistence bootstrap in `SKILL.md` first: verify durable memory/`CLAUDE.md` contains the reload + recovery-sync + subtask-guide rule, and add it if missing.
+- After compaction, context reset, model restart, or memory recovery, use chat as a recovery sync before any plan, mutation, review, or completion claim.
 - Include what happened since the last Codex reply, including what Claude told the user when it affects the current state.
 - Include a verbatim user message only if the user actually said something new since the last Codex call.
 - If there is no new user message, omit the verbatim user block entirely.
@@ -60,21 +60,21 @@ If Codex prepared a plan and Claude disagrees, use `chat`. Do not move to mutati
 
 If there is no fresh user message, remove the entire `Optional fresh user message` section.
 
-## Post-compact recovery template
+## Recovery sync template
 
 Use this immediately after compaction, context reset, model restart, or memory recovery:
 
 ```text
 ## Background
-Claude just recovered from compaction/context reset and reloaded codex-skill.
+Claude just recovered from compaction, context reset, model restart, or memory recovery and reloaded codex-skill.
 
 ## Current turn context
-- Durable memory/CLAUDE.md reload rule checked or updated:
+- Durable memory/CLAUDE.md reload + recovery-sync + subtask-guide rule checked or updated:
 - What Claude currently remembers:
 - What repository state Claude has verified so far:
 
 ## Claude message to Codex
-This is the first recovery sync after Claude compaction/context reset. Please re-apply the peer collaboration protocol: Claude and Codex are peers in judgment; mutation ownership only says who may change state; use read-only evidence and pushback instead of accepting Claude's recovered framing uncritically.
+This is the first recovery sync after Claude compaction, context reset, model restart, or memory recovery. Please re-apply the peer collaboration protocol: Claude and Codex are peers in judgment; mutation ownership only says who may change state; use read-only evidence and pushback instead of accepting Claude's recovered framing uncritically.
 
 Please reconstruct the current collaboration state from your persistent session:
 - Current user goal and hard constraints:

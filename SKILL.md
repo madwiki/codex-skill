@@ -19,12 +19,12 @@ This is the first required action every time this skill is loaded, before choosi
 
 1. Check durable project memory and the nearest applicable `CLAUDE.md` for a concrete rule that says: after Claude startup, restart, compaction, context reset, model restart, or memory recovery, Claude must reload `codex-skill` before continuing collaborative coding work.
 2. If the rule is missing, add or update the smallest durable reminder in project memory if available; otherwise update or create the nearest project `CLAUDE.md` allowed by workspace policy.
-3. The durable reminder must also say to ask Codex for a recovery sync after compaction/context reset and to load the subtask guide MD files only when the workflow needs them.
+3. The durable reminder must also say to ask Codex for a recovery sync after compaction, context reset, model restart, or memory recovery, and to load the subtask guide MD files only when the workflow needs them.
 4. The reminder should be concrete, for example: `At Claude startup/restart and after any compaction, context reset, model restart, or memory recovery, reload codex-skill before continuing collaborative coding work. Then ask Codex for a recovery sync before planning, mutating, reviewing, or declaring completion. Follow SKILL.md first and load subtask guide MD files only when that workflow is needed. Claude and Codex must continue the collaboration protocol instead of working solo.`
 5. This bootstrap is a protocol-preservation write. It is allowed before selecting Claude-mutates or Codex-mutates mode, but it must be narrowly scoped to memory/`CLAUDE.md` and must not modify task files.
 6. If durable storage is ambiguous or workspace policy forbids the write, ask the user where to store the reminder before continuing collaborative work.
 
-## Post-compact recovery sync
+## Recovery sync
 
 After any compaction, context reset, model restart, or memory recovery, do not continue from Claude's reconstructed memory alone. After the persistence bootstrap, use `chat.md` to ask the persistent Codex session where the collaboration currently stands.
 
@@ -47,7 +47,7 @@ State-changing work includes file edits, generated artifacts, write-formatters, 
 
 Both agents may do read-only investigation in any mode: read files, search the repository, inspect diffs, inspect docs, reason about tests, and verify claims. If a command might write or affect shared state, it belongs to the mutation owner for the current mode.
 
-Do not repeat the full peer-collaboration charter in every ordinary Codex call. Establish it when Claude loads this skill and when the Codex session is initialized; after compaction or context reset, restate it once in the first recovery-sync chat, then continue with concise task-specific briefs.
+Do not repeat the full peer-collaboration charter in every ordinary Codex call. Establish it when Claude loads this skill and when the Codex session is initialized; after compaction, context reset, model restart, or memory recovery, restate it once in the first recovery-sync chat, then continue with concise task-specific briefs.
 
 ## Consensus discipline
 
@@ -74,7 +74,7 @@ Use the guide whose name matches the current workflow.
 
 ## Codex-mutates loop
 
-1. After any compaction or context reset, run the post-compact recovery sync first.
+1. After any compaction, context reset, model restart, or memory recovery, run the recovery sync first.
 2. Use `chat.md` until the broad direction is understood.
 3. Use `request-plan.md` for Codex to propose a plan and the first small mutation step.
 4. If Claude disagrees with the plan, use `chat.md` to resolve the disagreement or prepare a user decision.
@@ -84,7 +84,7 @@ Use the guide whose name matches the current workflow.
 
 ## Claude-mutates loop
 
-1. After any compaction or context reset, run the post-compact recovery sync first.
+1. After any compaction, context reset, model restart, or memory recovery, run the recovery sync first.
 2. Use `chat.md` until the broad direction is understood.
 3. Use `review-my-plan.md` before Claude performs meaningful state-changing work.
 4. If Codex disagrees, use `chat.md` to resolve the disagreement or prepare a user decision.
