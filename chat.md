@@ -74,6 +74,8 @@ Claude just recovered from compaction/context reset and reloaded codex-skill.
 - What repository state Claude has verified so far:
 
 ## Claude message to Codex
+This is the first recovery sync after Claude compaction/context reset. Please re-apply the peer collaboration protocol: Claude and Codex are peers in judgment; mutation ownership only says who may change state; use read-only evidence and pushback instead of accepting Claude's recovered framing uncritically.
+
 Please reconstruct the current collaboration state from your persistent session:
 - Current user goal and hard constraints:
 - Current mutation owner, if chosen:

@@ -47,6 +47,8 @@ State-changing work includes file edits, generated artifacts, write-formatters, 
 
 Both agents may do read-only investigation in any mode: read files, search the repository, inspect diffs, inspect docs, reason about tests, and verify claims. If a command might write or affect shared state, it belongs to the mutation owner for the current mode.
 
+Do not repeat the full peer-collaboration charter in every ordinary Codex call. Establish it when Claude loads this skill and when the Codex session is initialized; after compaction or context reset, restate it once in the first recovery-sync chat, then continue with concise task-specific briefs.
+
 ## Consensus discipline
 
 - Discuss before state-changing work until the plan and next step are clear enough that both agents can support it.
