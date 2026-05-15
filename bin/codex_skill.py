@@ -21,11 +21,6 @@ DEFAULT_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT")
 VERBATIM_BEGIN = "<<<USER_MESSAGE_VERBATIM_BEGIN>>>"
 VERBATIM_END = "<<<USER_MESSAGE_VERBATIM_END>>>"
 
-TOOL_ALIASES = {
-    "plan": "review-my-plan",
-    "review": "review-my-work",
-}
-
 TOOL_HELP = {
     "chat": "Shared discussion / context sync / disagreement resolution (reads stdin).",
     "review-my-plan": "Claude-mutates mode: Codex reviews Claude's plan without mutating state.",
@@ -33,8 +28,6 @@ TOOL_HELP = {
     "request-plan": "Codex-mutates mode: Codex proposes a plan without mutating state.",
     "request-mutation": "Codex-mutates mode: Codex performs one agreed mutation step, then stops.",
     "review-your-work": "Codex-mutates mode: Claude reviews Codex's work and asks Codex to respond.",
-    "plan": "Legacy alias for review-my-plan.",
-    "review": "Legacy alias for review-my-work.",
 }
 
 
@@ -138,10 +131,6 @@ def normalize_agent_brief(stdin_text: str) -> str:
     return stripped + "\n"
 
 
-def canonical_tool(tool: str) -> str:
-    return TOOL_ALIASES.get(tool, tool)
-
-
 def role_card_text() -> str:
     return "\n".join(
         [
@@ -213,12 +202,11 @@ def mutation_policy_text(tool: str) -> str:
     )
 
 
-def collaboration_header(invoked_tool: str) -> str:
-    tool = canonical_tool(invoked_tool)
+def collaboration_header(tool: str) -> str:
     return "\n".join(
         [
             "<<<CODEX_SKILL_BRIEF_BEGIN>>>",
-            f"origin=codex-skill invoked_tool={invoked_tool} canonical_tool={tool}",
+            f"origin=codex-skill tool={tool}",
             "You are speaking with Claude Code, not the end user.",
             "This brief continues the persistent collaboration session.",
             "This protocol supersedes older codex-skill prompts that required a leading verbatim user block.",
@@ -233,8 +221,7 @@ def collaboration_header(invoked_tool: str) -> str:
     )
 
 
-def tool_suffix(invoked_tool: str) -> str:
-    tool = canonical_tool(invoked_tool)
+def tool_suffix(tool: str) -> str:
     if tool == "review-my-plan":
         return "\n".join(
             [

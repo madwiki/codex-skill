@@ -41,11 +41,6 @@ Codex-mutates:
 - `bin/codex-skill-request-mutation`
 - `bin/codex-skill-review-your-work`
 
-Legacy aliases:
-
-- `bin/codex-skill-plan` -> `review-my-plan`
-- `bin/codex-skill-review` -> `review-my-work`
-
 ## Docs
 
 - `SKILL.md`
@@ -55,4 +50,3 @@ Legacy aliases:
 - `request-plan.md`
 - `request-mutation.md`
 - `review-your-work.md`
-- `plan.md` and `review.md` legacy aliases

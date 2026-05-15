@@ -64,9 +64,3 @@ If there is no fresh user message, remove the entire `Optional fresh user messag
 ```bash
 <skill_root>/bin/codex-skill-review-my-work < message.txt
 ```
-
-Legacy alias:
-
-```bash
-<skill_root>/bin/codex-skill-review < message.txt
-```

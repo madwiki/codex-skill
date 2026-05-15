@@ -1,11 +1,10 @@
 ---
 name: codex-skill
 description: >
-  [AUTO-TRIGGER] Use /codex-skill when Claude Code should collaborate with a persistent Codex session instead of working alone.
-  On every load, first run the persistence bootstrap: verify durable memory or CLAUDE.md says to reload this skill and ask Codex
-  for recovery sync after compaction/context reset, and add that reminder if missing. Use chat for context sync, disagreements,
-  consensus-building, and user-facing decision preparation.
-  Choose Claude-mutates or Codex-mutates mode when any state-changing work is needed.
+  Every Claude Code startup, restart, compaction, context reset, or memory recovery must load /codex-skill before continuing collaborative coding work.
+  On load, first verify durable memory or CLAUDE.md contains the reload rule, Codex recovery-sync rule, and instruction to load subtask guide MD files only when needed; add or update it if missing.
+  Use /codex-skill to coordinate with a persistent Codex peer collaborator for context sync, disagreements, consensus-building,
+  user-facing decision preparation, and Claude-mutates or Codex-mutates workflows.
 ---
 
 # codex-skill
@@ -18,11 +17,12 @@ Codex is invoked by Claude; Codex does not speak to the user directly. Claude re
 
 This is the first required action every time this skill is loaded, before choosing `chat`, planning, mutating, reviewing, or declaring completion.
 
-1. Check durable project memory and the nearest applicable `CLAUDE.md` for a concrete rule that says: after compaction, context reset, model restart, or memory recovery, Claude must reload `codex-skill` and ask Codex for a recovery sync before continuing the task.
+1. Check durable project memory and the nearest applicable `CLAUDE.md` for a concrete rule that says: after Claude startup, restart, compaction, context reset, model restart, or memory recovery, Claude must reload `codex-skill` before continuing collaborative coding work.
 2. If the rule is missing, add or update the smallest durable reminder in project memory if available; otherwise update or create the nearest project `CLAUDE.md` allowed by workspace policy.
-3. The reminder should be concrete, for example: `After any compaction or context reset, reload codex-skill, then ask Codex for a recovery sync before planning, mutating, reviewing, or declaring completion. Claude and Codex must continue the collaboration protocol instead of working solo.`
-4. This bootstrap is a protocol-preservation write. It is allowed before selecting Claude-mutates or Codex-mutates mode, but it must be narrowly scoped to memory/`CLAUDE.md` and must not modify task files.
-5. If durable storage is ambiguous or workspace policy forbids the write, ask the user where to store the reminder before continuing collaborative work.
+3. The durable reminder must also say to ask Codex for a recovery sync after compaction/context reset and to load the subtask guide MD files only when the workflow needs them.
+4. The reminder should be concrete, for example: `At Claude startup/restart and after any compaction, context reset, model restart, or memory recovery, reload codex-skill before continuing collaborative coding work. Then ask Codex for a recovery sync before planning, mutating, reviewing, or declaring completion. Follow SKILL.md first and load subtask guide MD files only when that workflow is needed. Claude and Codex must continue the collaboration protocol instead of working solo.`
+5. This bootstrap is a protocol-preservation write. It is allowed before selecting Claude-mutates or Codex-mutates mode, but it must be narrowly scoped to memory/`CLAUDE.md` and must not modify task files.
+6. If durable storage is ambiguous or workspace policy forbids the write, ask the user where to store the reminder before continuing collaborative work.
 
 ## Post-compact recovery sync
 
@@ -70,10 +70,7 @@ Use only one mutation owner for a task segment to avoid conflicting edits and pr
 | Codex will own state-changing work and Claude has approved one small mutation step | `request-mutation.md` |
 | Codex owned prior state-changing work and Claude wants Codex to respond to Claude's review | `review-your-work.md` |
 
-Legacy aliases remain available for older habits:
-
-- `plan.md` means `review-my-plan.md` (Claude-mutates).
-- `review.md` means `review-my-work.md` (Claude-mutates).
+Use the guide whose name matches the current workflow.
 
 ## Codex-mutates loop
 
