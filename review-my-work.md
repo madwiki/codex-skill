@@ -13,57 +13,63 @@ Claude owns mutation. Codex reviews Claude's work, may do read-only investigatio
 
 ## Collaboration rules
 
-- Run the persistence bootstrap in `SKILL.md` first: verify durable memory/`CLAUDE.md` contains the reload + recovery-sync + subtask-guide rule, and add it if missing.
-- If this call follows compaction, context reset, model restart, or memory recovery, use `chat.md` for recovery sync before work review.
-- State clearly that the current mode is Claude-mutates.
+- Run the persistence bootstrap in `SKILL.md` first: verify durable memory/`CLAUDE.md` contains the reload + init + subtask-guide rule, and add it if missing.
+- For a new shared task, or after compact/context clear, run `init.md` before work review.
+- This call is a hard gate. Claude must not treat the work as accepted until Codex returns `approved_work: true`.
 - Include enough evidence for Codex to review independently: changed files, test results, known risks, and unresolved assumptions.
 - Ask Codex to read/search/inspect when needed and to look for holes rather than rubber-stamp the result.
 - Ask Codex to personally fact-check important claims and review whole-system coherence across affected code, tests, docs, prompts, memory, and artifacts.
 - If Claude disagrees with Codex's findings, switch to `chat.md` and discuss evidence until consensus or user escalation.
 
-## Message template
+## Input contract
 
-```text
-## Background
-<Durable project/task context Codex needs.>
+Call `review-my-work` with JSON on stdin.
 
-## Current turn context
-- What Claude told the user:
-- What the user said since the last Codex call, if anything:
-- Why the user said it / surrounding situation:
-- What Claude changed:
-- What Claude tested:
-- Current state:
+Required:
 
-## Optional fresh user message
-<<<USER_MESSAGE_VERBATIM_BEGIN>>>
-<copy/paste the user's exact words only when fresh user text exists>
-<<<USER_MESSAGE_VERBATIM_END>>>
-
-## Mutation ownership
-Mode: Claude-mutates.
-Codex may read/search/inspect but must not mutate state.
-
-## Delivery summary
-- Changed files:
-- Behavioral change:
-- Test evidence:
-- Known risks:
-- Rollback / recovery:
-
-## Claude message to Codex
-- Review focus:
-- Facts I want independently checked:
-- Whole-system coherence concerns:
-- Where I want pushback:
-- Where I agree/disagree with Codex so far:
-- Minimum user decision if consensus cannot be reached:
+```json
+{
+  "work_for_review": "Describe Claude's actual work, validation, and remaining concerns here."
+}
 ```
 
-If there is no fresh user message, remove the entire `Optional fresh user message` section.
+Optional additions:
+
+```json
+{
+  "work_for_review": "Describe Claude's actual work, validation, and remaining concerns here.",
+  "new_information": "Only if something changed after the work was done or after the last Codex turn.",
+  "fresh_user_message": "Only if the user actually said new words that matter for this review."
+}
+```
+
+Rules:
+
+- `work_for_review` is required
+- `new_information` is optional
+- `fresh_user_message` is optional
+- no other top-level fields are accepted
+- `work_for_review` should include what Claude changed, what was verified, any known deviations from the earlier approved plan, and any remaining risks or uncertainty
+
+## Output contract
+
+Codex must return exactly one JSON object with exactly these top-level fields:
+
+```json
+{
+  "approved_work": true,
+  "work_review_reply": "..."
+}
+```
+
+Meaning:
+
+- `approved_work: true` means Claude may treat the reviewed work as accepted
+- `approved_work: false` means Claude must not treat the work as accepted yet
+- `work_review_reply` contains Codex's reasoning, blockers, risks, disagreement, requested fixes, and any minimum user decision if needed
 
 ## Run
 
 ```bash
-<skill_root>/bin/codex-skill-review-my-work < message.txt
+<skill_root>/bin/codex-skill-review-my-work < review-my-work.json
 ```

@@ -17,17 +17,42 @@ CODEX_BIN = os.environ.get("CODEX_BIN", "codex")
 CODEX_HOME = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex")))
 DEFAULT_MODEL = os.environ.get("CODEX_MODEL")
 DEFAULT_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT")
+SCRIPT_DIR = Path(__file__).resolve().parent
+SKILL_ROOT = SCRIPT_DIR.parent
+PROMPTS_DIR = SKILL_ROOT / "prompts"
 
 VERBATIM_BEGIN = "<<<USER_MESSAGE_VERBATIM_BEGIN>>>"
 VERBATIM_END = "<<<USER_MESSAGE_VERBATIM_END>>>"
+INIT_TASK_FIELD = "task_background"
+INIT_RECOVERY_FIELD = "recovery_background"
+INIT_TASK_REPLY_FIELD = "task_understanding_reply"
+INIT_RECOVERY_REPLY_FIELD = "context_recovery_reply"
+REVIEW_PLAN_FIELD = "plan_for_review"
+REVIEW_PLAN_NEW_INFO_FIELD = "new_information"
+REVIEW_PLAN_FRESH_USER_FIELD = "fresh_user_message"
+REVIEW_PLAN_APPROVED_FIELD = "approved_to_mutate"
+REVIEW_PLAN_REPLY_FIELD = "plan_review_reply"
+REVIEW_WORK_FIELD = "work_for_review"
+REVIEW_WORK_NEW_INFO_FIELD = "new_information"
+REVIEW_WORK_FRESH_USER_FIELD = "fresh_user_message"
+REVIEW_WORK_APPROVED_FIELD = "approved_work"
+REVIEW_WORK_REPLY_FIELD = "work_review_reply"
+CHAT_MESSAGE_FIELD = "message_for_codex"
+CHAT_FRESH_USER_FIELD = "fresh_user_message"
+WORK_SYNC_MESSAGE_FIELD = "sync_message"
+WORK_SYNC_FRESH_USER_FIELD = "fresh_user_message"
+WORK_SYNC_REPLY_FIELD = "discussion_reply"
+WORK_SYNC_PLAN_FIELD = "plan"
+REQUEST_MUTATION_FIELD = "approved_mutation"
+REQUEST_MUTATION_FRESH_USER_FIELD = "fresh_user_message"
 
 TOOL_HELP = {
-    "chat": "Shared discussion / context sync / disagreement resolution (reads stdin).",
-    "review-my-plan": "Claude-mutates mode: Codex reviews Claude's plan without mutating state.",
-    "review-my-work": "Claude-mutates mode: Codex reviews Claude's work without mutating state.",
-    "request-plan": "Codex-mutates mode: Codex proposes a plan without mutating state.",
-    "request-mutation": "Codex-mutates mode: Codex performs one agreed mutation step, then stops.",
-    "review-your-work": "Codex-mutates mode: Claude reviews Codex's work and asks Codex to respond.",
+    "init": "Bootstrap Codex collaboration for a new task or recovery sync (reads JSON from stdin).",
+    "chat": "Claude-mutates discussion / disagreement resolution (reads JSON from stdin).",
+    "review-my-plan": "Claude-mutates mode: Codex reviews Claude's plan without mutating state (reads JSON from stdin).",
+    "review-my-work": "Claude-mutates mode: Codex reviews Claude's work without mutating state (reads JSON from stdin).",
+    "work-sync": "Codex-mutates sync turn for discussion, plan output, and review response (reads JSON from stdin).",
+    "request-mutation": "Codex-mutates mode: Codex performs one approved mutation step (reads JSON from stdin).",
 }
 
 
@@ -117,189 +142,544 @@ def write_session_id(repo_root: Path, session_id: str) -> None:
     tmp.replace(path)
 
 
-def normalize_agent_brief(stdin_text: str) -> str:
-    text = stdin_text.replace("\r\n", "\n").replace("\r", "\n")
-    stripped = text.strip()
-    if not stripped:
-        raise ValueError("Input is empty. Provide a collaboration brief via stdin.")
-
-    if VERBATIM_BEGIN in stripped and VERBATIM_END not in stripped:
-        raise ValueError(f"Missing verbatim end marker: {VERBATIM_END}")
-    if VERBATIM_END in stripped and VERBATIM_BEGIN not in stripped:
-        raise ValueError(f"Missing verbatim begin marker: {VERBATIM_BEGIN}")
-
-    return stripped + "\n"
+@dataclass(frozen=True)
+class InitPayload:
+    mode: str
+    background: str
 
 
-def role_card_text() -> str:
-    return "\n".join(
-        [
-            "<<<ROLE_CARD_BEGIN>>>",
-            "This is a persistent collaboration session between Codex and Claude Code.",
-            "Claude Code is the skill user and invokes Codex through codex-skill. Codex replies to Claude Code, not directly to the human user.",
-            "The agents share one user goal and should supervise each other's reasoning, evidence, and discipline.",
-            "Treat every message as the next turn in the same collaboration thread, not as an isolated one-shot question.",
-            "Claude should brief you with durable background, current turn context, optional verbatim user messages, and Claude's direct message to Codex.",
-            "A verbatim user block is optional evidence. It appears only when the user actually said something new since the last Codex exchange.",
-            "If there is no verbatim user block, do not infer that Claude forgot it; use the background, current turn context, and Claude's direct message instead.",
-            "Treat Background as durable task context, Current turn context as the latest delta, and Claude message to Codex as the direct request.",
-            "You are a collaborator, not a higher authority, approver, subordinate, or final judge. Your advice can be wrong, and Claude's view can also be wrong.",
-            "The work modes define mutation ownership only: which agent may perform state-changing actions. They do not define whose judgment is more important.",
-            "Both agents should perform read-only investigation when useful: read files, search the codebase, inspect diffs, check docs, and verify claims instead of trusting summaries blindly.",
-            "During review, personally fact-check important claims and review whole-system coherence across the affected code, tests, docs, prompts, durable memory, generated artifacts, and workflow instructions.",
-            "When the task changes codex-skill itself, include SKILL.md, guide files, CLI prompt generation, wrapper scripts, README, command names, and generated prompt text in the coherence review.",
-            "After Claude reports compaction, context reset, model restart, or memory recovery, help reconstruct shared state: user goal, constraints, mutation owner, last agreed plan, last completed step, pending review, next step, risks, and user decisions needed.",
-            "Review with rigor. Actively look for requirement gaps, hallucinated assumptions, broken edge cases, regressions, and weak tests. Push back to improve the outcome, not to win an argument.",
-            "When you disagree with Claude, compare evidence, assumptions, tradeoffs, and user constraints. Try to persuade with evidence; do not concede just to move the workflow forward.",
-            "Help Claude reason toward real consensus before state-changing action. If consensus is not possible, tell Claude what user-facing decision is needed.",
-            "If consensus is not reachable or both sides are uncertain, help Claude prepare concise options and the minimum user decision needed.",
-            'When replying to Claude messages, address Claude and refer to the human as "the user" (not "you").',
-            "If user input is required, list the minimum questions for Claude to ask the user. Do not ask the user directly.",
-            "If Claude appears to have lost this collaboration protocol after compaction, context reset, model restart, or memory recovery, tell Claude to run the codex-skill persistence bootstrap and recovery sync: check durable memory/CLAUDE.md for the reload + recovery-sync + subtask-guide rule, add it if missing, then ask Codex to reconstruct the current collaboration state before continuing.",
-            "<<<ROLE_CARD_END>>>",
-        ]
+@dataclass(frozen=True)
+class ReviewMyPlanPayload:
+    plan_for_review: str
+    new_information: Optional[str]
+    fresh_user_message: Optional[str]
+
+
+@dataclass(frozen=True)
+class ChatPayload:
+    message_for_codex: str
+    fresh_user_message: Optional[str]
+
+
+@dataclass(frozen=True)
+class ReviewMyWorkPayload:
+    work_for_review: str
+    new_information: Optional[str]
+    fresh_user_message: Optional[str]
+
+
+@dataclass(frozen=True)
+class WorkSyncPayload:
+    sync_message: str
+    fresh_user_message: Optional[str]
+
+
+@dataclass(frozen=True)
+class RequestMutationPayload:
+    approved_mutation: str
+    fresh_user_message: Optional[str]
+
+
+def parse_init_payload(stdin_text: str) -> InitPayload:
+    text = stdin_text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not text:
+        raise ValueError("Init input is empty. Provide JSON with exactly one of: task_background or recovery_background.")
+
+    try:
+        obj = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Init input must be valid JSON: {exc.msg}") from exc
+
+    if not isinstance(obj, dict):
+        raise ValueError("Init input must be a JSON object.")
+
+    if len(obj) != 1:
+        raise ValueError("Init input must contain exactly one top-level field: task_background or recovery_background.")
+
+    if INIT_TASK_FIELD in obj:
+        value = obj[INIT_TASK_FIELD]
+        mode = "task"
+    elif INIT_RECOVERY_FIELD in obj:
+        value = obj[INIT_RECOVERY_FIELD]
+        mode = "recovery"
+    else:
+        raise ValueError("Init input must contain exactly one of: task_background or recovery_background.")
+
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("Init background must be a non-empty string.")
+
+    return InitPayload(mode=mode, background=value.strip())
+
+
+def parse_review_my_plan_payload(stdin_text: str) -> ReviewMyPlanPayload:
+    text = stdin_text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not text:
+        raise ValueError("review-my-plan input is empty. Provide JSON with plan_for_review.")
+
+    try:
+        obj = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"review-my-plan input must be valid JSON: {exc.msg}") from exc
+
+    if not isinstance(obj, dict):
+        raise ValueError("review-my-plan input must be a JSON object.")
+
+    allowed_keys = {
+        REVIEW_PLAN_FIELD,
+        REVIEW_PLAN_NEW_INFO_FIELD,
+        REVIEW_PLAN_FRESH_USER_FIELD,
+    }
+    unknown_keys = set(obj.keys()) - allowed_keys
+    if unknown_keys:
+        raise ValueError(f"review-my-plan input has unsupported fields: {', '.join(sorted(unknown_keys))}")
+
+    plan_for_review = obj.get(REVIEW_PLAN_FIELD)
+    if not isinstance(plan_for_review, str) or not plan_for_review.strip():
+        raise ValueError("review-my-plan requires a non-empty string field: plan_for_review.")
+
+    def parse_optional_string(field: str) -> Optional[str]:
+        value = obj.get(field)
+        if value is None:
+            return None
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"review-my-plan field {field} must be a non-empty string when provided.")
+        return value.strip()
+
+    return ReviewMyPlanPayload(
+        plan_for_review=plan_for_review.strip(),
+        new_information=parse_optional_string(REVIEW_PLAN_NEW_INFO_FIELD),
+        fresh_user_message=parse_optional_string(REVIEW_PLAN_FRESH_USER_FIELD),
     )
 
 
-def mutation_policy_text(tool: str) -> str:
-    if tool == "request-mutation":
-        return "\n".join(
-            [
-                "Mutation ownership: Codex-mutates.",
-                "Codex may perform state-changing actions only for the single approved step described in Claude's brief.",
-                "Before mutating, verify the scope and assumptions from the repository when needed.",
-                "After that step, stop and report exactly what changed, what evidence/tests you used, and what should be reviewed next.",
-                "Do not continue into the next feature/stage. Do not commit, push, release, or deploy unless Claude's brief explicitly authorizes that exact action.",
-            ]
-        )
-    if tool == "request-plan":
-        return "\n".join(
-            [
-                "Mutation ownership: Codex-mutates, planning phase.",
-                "Codex must not mutate state or perform state-changing actions in this call.",
-                "Use read-only investigation as needed, then propose the plan and the first small mutation step for Claude to review.",
-            ]
-        )
-    if tool == "review-your-work":
-        return "\n".join(
-            [
-                "Mutation ownership: Codex-mutates, review/discussion phase.",
-                "Claude is reviewing Codex's prior work. Codex must not mutate state or perform state-changing actions in this call.",
-                "Respond to the review with evidence, agreements/disagreements, and the smallest next repair or continuation step if needed.",
-            ]
-        )
-    if tool in {"review-my-plan", "review-my-work"}:
-        return "\n".join(
-            [
-                "Mutation ownership: Claude-mutates.",
-                "Codex must not mutate state or perform state-changing actions in this call.",
-                "Codex may do read-only investigation and should review Claude's plan/work rigorously before Claude mutates or delivers.",
-            ]
-        )
-    return "\n".join(
-        [
-            "Mutation ownership: undecided/shared discussion.",
-            "Use this call for context sync, questions, disagreements, and consensus-building.",
-            "Do not perform state-changing actions in chat unless Claude's brief explicitly changes the mode and authorizes a narrow action; prefer the dedicated mutation entrypoint.",
-        ]
+def parse_chat_payload(stdin_text: str) -> ChatPayload:
+    text = stdin_text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not text:
+        raise ValueError("chat input is empty. Provide JSON with message_for_codex.")
+
+    try:
+        obj = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"chat input must be valid JSON: {exc.msg}") from exc
+
+    if not isinstance(obj, dict):
+        raise ValueError("chat input must be a JSON object.")
+
+    allowed_keys = {CHAT_MESSAGE_FIELD, CHAT_FRESH_USER_FIELD}
+    unknown_keys = set(obj.keys()) - allowed_keys
+    if unknown_keys:
+        raise ValueError(f"chat input has unsupported fields: {', '.join(sorted(unknown_keys))}")
+
+    message = obj.get(CHAT_MESSAGE_FIELD)
+    if not isinstance(message, str) or not message.strip():
+        raise ValueError("chat requires a non-empty string field: message_for_codex.")
+
+    fresh_user_message = obj.get(CHAT_FRESH_USER_FIELD)
+    if fresh_user_message is not None:
+        if not isinstance(fresh_user_message, str) or not fresh_user_message.strip():
+            raise ValueError("chat field fresh_user_message must be a non-empty string when provided.")
+        fresh_user_message = fresh_user_message.strip()
+
+    return ChatPayload(
+        message_for_codex=message.strip(),
+        fresh_user_message=fresh_user_message,
     )
 
 
-def collaboration_header(tool: str) -> str:
-    return "\n".join(
-        [
-            "<<<CODEX_SKILL_BRIEF_BEGIN>>>",
-            f"origin=codex-skill tool={tool}",
-            "You are speaking with Claude Code, not the end user.",
-            "This brief continues the persistent collaboration session.",
-            "Do not require a verbatim user message; it is optional and should appear only when fresh user text exists.",
-            "Collaborate toward consensus. Do not act like an approver, subordinate, or higher authority.",
-            mutation_policy_text(tool),
-            "If you disagree with Claude, explain the evidence and assumptions to discuss next.",
-            "If consensus is not reachable or uncertainty remains, propose the minimum user-facing decision for Claude to ask.",
-            "Do not ask the end user directly. If user input is required, list the minimum questions for Claude to ask.",
-            "<<<CODEX_SKILL_BRIEF_END>>>",
-        ]
+def parse_review_my_work_payload(stdin_text: str) -> ReviewMyWorkPayload:
+    text = stdin_text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not text:
+        raise ValueError("review-my-work input is empty. Provide JSON with work_for_review.")
+
+    try:
+        obj = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"review-my-work input must be valid JSON: {exc.msg}") from exc
+
+    if not isinstance(obj, dict):
+        raise ValueError("review-my-work input must be a JSON object.")
+
+    allowed_keys = {
+        REVIEW_WORK_FIELD,
+        REVIEW_WORK_NEW_INFO_FIELD,
+        REVIEW_WORK_FRESH_USER_FIELD,
+    }
+    unknown_keys = set(obj.keys()) - allowed_keys
+    if unknown_keys:
+        raise ValueError(f"review-my-work input has unsupported fields: {', '.join(sorted(unknown_keys))}")
+
+    work_for_review = obj.get(REVIEW_WORK_FIELD)
+    if not isinstance(work_for_review, str) or not work_for_review.strip():
+        raise ValueError("review-my-work requires a non-empty string field: work_for_review.")
+
+    def parse_optional_string(field: str) -> Optional[str]:
+        value = obj.get(field)
+        if value is None:
+            return None
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"review-my-work field {field} must be a non-empty string when provided.")
+        return value.strip()
+
+    return ReviewMyWorkPayload(
+        work_for_review=work_for_review.strip(),
+        new_information=parse_optional_string(REVIEW_WORK_NEW_INFO_FIELD),
+        fresh_user_message=parse_optional_string(REVIEW_WORK_FRESH_USER_FIELD),
     )
 
 
-def tool_suffix(tool: str) -> str:
-    if tool == "review-my-plan":
-        return "\n".join(
-            [
-                "Please answer in 4 sections:",
-                "1) Requirements gaps / misunderstanding risks",
-                "2) Agreement and disagreement with Claude's plan",
-                "3) Facts to verify and whole-system coherence risks",
-                "4) Minimal user questions and acceptance checklist",
-                "If you disagree with the plan, explain the evidence and assumptions needed to reach consensus before any mutation.",
-                "Keep it concise and prioritize blockers over nitpicks.",
-            ]
-        )
-    if tool == "review-my-work":
-        return "\n".join(
-            [
-                "Please answer in 4 sections:",
-                "1) Correctness vs the user requirements and task context",
-                "2) Fact-check findings and whole-system coherence issues",
-                "3) Likely regressions, missing coverage, and minimal tests to add",
-                "4) Minimum user confirmations (if any)",
-                "If you disagree with Claude's delivery judgment, explain the evidence and assumptions needed to reach consensus before claiming completion.",
-                "Keep it concise and prioritize blockers over nitpicks.",
-            ]
-        )
-    if tool == "request-plan":
-        return "\n".join(
-            [
-                "Please answer in 4 sections:",
-                "1) Requirements interpretation and assumptions",
-                "2) Proposed plan",
-                "3) Fact-check targets, system areas to inspect, and coherence risks",
-                "4) First small mutation step for Claude to approve",
-                "Do not mutate state in this call. If Claude disagrees with this plan, continue through chat until consensus or user escalation.",
-                "Keep it concise and prioritize decisions that affect implementation.",
-            ]
-        )
-    if tool == "request-mutation":
-        return "\n".join(
-            [
-                "Please answer in 4 sections:",
-                "1) Step performed",
-                "2) Files/state changed",
-                "3) Evidence, tests, fact-checking, and coherence self-review",
-                "4) Stop point, remaining risks, and recommended next step",
-                "Perform only the approved mutation step, then stop for Claude review.",
-                "If the approved step is ambiguous or unsafe, do read-only investigation and ask Claude to resolve the ambiguity instead of mutating.",
-                "Keep it concise and include enough detail for Claude to review independently.",
-            ]
-        )
-    if tool == "review-your-work":
-        return "\n".join(
-            [
-                "Please answer in 4 sections:",
-                "1) Response to Claude's review",
-                "2) Agreements, disagreements, fact-checks, and coherence evidence",
-                "3) Smallest next repair or continuation step",
-                "4) Whether user escalation is needed",
-                "Do not mutate state in this call. If a fix is needed, propose the next mutation step for Claude to approve.",
-                "Keep it concise and prioritize blockers over nitpicks.",
-            ]
-        )
-    return "Reply concisely. Collaborate toward consensus before state-changing action. Use Claude's language unless there is a reason to switch."
+def parse_work_sync_payload(stdin_text: str) -> WorkSyncPayload:
+    text = stdin_text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not text:
+        raise ValueError("work-sync input is empty. Provide JSON with sync_message.")
+
+    try:
+        obj = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"work-sync input must be valid JSON: {exc.msg}") from exc
+
+    if not isinstance(obj, dict):
+        raise ValueError("work-sync input must be a JSON object.")
+
+    allowed_keys = {WORK_SYNC_MESSAGE_FIELD, WORK_SYNC_FRESH_USER_FIELD}
+    unknown_keys = set(obj.keys()) - allowed_keys
+    if unknown_keys:
+        raise ValueError(f"work-sync input has unsupported fields: {', '.join(sorted(unknown_keys))}")
+
+    sync_message = obj.get(WORK_SYNC_MESSAGE_FIELD)
+    if not isinstance(sync_message, str) or not sync_message.strip():
+        raise ValueError("work-sync requires a non-empty string field: sync_message.")
+
+    fresh_user_message = obj.get(WORK_SYNC_FRESH_USER_FIELD)
+    if fresh_user_message is not None:
+        if not isinstance(fresh_user_message, str) or not fresh_user_message.strip():
+            raise ValueError("work-sync field fresh_user_message must be a non-empty string when provided.")
+        fresh_user_message = fresh_user_message.strip()
+
+    return WorkSyncPayload(
+        sync_message=sync_message.strip(),
+        fresh_user_message=fresh_user_message,
+    )
 
 
-def build_prompt(tool: str, stdin_text: str, include_role_card: bool) -> str:
-    brief = normalize_agent_brief(stdin_text)
-    parts: list[str] = []
+def parse_request_mutation_payload(stdin_text: str) -> RequestMutationPayload:
+    text = stdin_text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not text:
+        raise ValueError("request-mutation input is empty. Provide JSON with approved_mutation.")
 
-    if include_role_card:
-        parts.append(role_card_text())
+    try:
+        obj = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"request-mutation input must be valid JSON: {exc.msg}") from exc
 
-    parts.append(collaboration_header(tool))
-    parts.append(brief.rstrip("\n"))
-    parts.append(tool_suffix(tool))
+    if not isinstance(obj, dict):
+        raise ValueError("request-mutation input must be a JSON object.")
+
+    allowed_keys = {REQUEST_MUTATION_FIELD, REQUEST_MUTATION_FRESH_USER_FIELD}
+    unknown_keys = set(obj.keys()) - allowed_keys
+    if unknown_keys:
+        raise ValueError(f"request-mutation input has unsupported fields: {', '.join(sorted(unknown_keys))}")
+
+    approved_mutation = obj.get(REQUEST_MUTATION_FIELD)
+    if not isinstance(approved_mutation, str) or not approved_mutation.strip():
+        raise ValueError("request-mutation requires a non-empty string field: approved_mutation.")
+
+    fresh_user_message = obj.get(REQUEST_MUTATION_FRESH_USER_FIELD)
+    if fresh_user_message is not None:
+        if not isinstance(fresh_user_message, str) or not fresh_user_message.strip():
+            raise ValueError("request-mutation field fresh_user_message must be a non-empty string when provided.")
+        fresh_user_message = fresh_user_message.strip()
+
+    return RequestMutationPayload(
+        approved_mutation=approved_mutation.strip(),
+        fresh_user_message=fresh_user_message,
+    )
+
+
+def load_prompt_asset(name: str) -> str:
+    path = PROMPTS_DIR / name
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"Missing prompt asset: {path}") from exc
+    if not text:
+        raise RuntimeError(f"Prompt asset is empty: {path}")
+    return text
+
+
+def build_init_prompt(stdin_text: str) -> tuple[str, str]:
+    payload = parse_init_payload(stdin_text)
+    if payload.mode == "task":
+        prompt_name = "init-task.md"
+        label = "Task background from Claude:"
+    else:
+        prompt_name = "init-recovery.md"
+        label = "Recovery background from Claude:"
+
+    prompt = "\n\n".join(
+        [
+            load_prompt_asset(prompt_name),
+            label,
+            payload.background,
+        ]
+    ).strip() + "\n"
+
+    return prompt, payload.mode
+
+
+def build_review_my_plan_prompt(stdin_text: str) -> str:
+    payload = parse_review_my_plan_payload(stdin_text)
+    parts = [
+        load_prompt_asset("review-my-plan.md"),
+        "Plan for review from Claude:",
+        payload.plan_for_review,
+    ]
+
+    if payload.new_information:
+        parts.extend(
+            [
+                "New information from Claude:",
+                payload.new_information,
+            ]
+        )
+
+    if payload.fresh_user_message:
+        parts.extend(
+            [
+                "Fresh user message from the user (verbatim):",
+                VERBATIM_BEGIN,
+                payload.fresh_user_message,
+                VERBATIM_END,
+            ]
+        )
 
     return "\n\n".join(parts).strip() + "\n"
+
+
+def build_chat_prompt(stdin_text: str) -> str:
+    payload = parse_chat_payload(stdin_text)
+    parts = [
+        load_prompt_asset("chat.md"),
+        "Message from Claude:",
+        payload.message_for_codex,
+    ]
+
+    if payload.fresh_user_message:
+        parts.extend(
+            [
+                "Fresh user message from the user (verbatim):",
+                VERBATIM_BEGIN,
+                payload.fresh_user_message,
+                VERBATIM_END,
+            ]
+        )
+
+    return "\n\n".join(parts).strip() + "\n"
+
+
+def build_review_my_work_prompt(stdin_text: str) -> str:
+    payload = parse_review_my_work_payload(stdin_text)
+    parts = [
+        load_prompt_asset("review-my-work.md"),
+        "Work for review from Claude:",
+        payload.work_for_review,
+    ]
+
+    if payload.new_information:
+        parts.extend(
+            [
+                "New information from Claude:",
+                payload.new_information,
+            ]
+        )
+
+    if payload.fresh_user_message:
+        parts.extend(
+            [
+                "Fresh user message from the user (verbatim):",
+                VERBATIM_BEGIN,
+                payload.fresh_user_message,
+                VERBATIM_END,
+            ]
+        )
+
+    return "\n\n".join(parts).strip() + "\n"
+
+
+def build_work_sync_prompt(stdin_text: str) -> str:
+    payload = parse_work_sync_payload(stdin_text)
+    parts = [
+        load_prompt_asset("work-sync.md"),
+        "Sync message from Claude:",
+        payload.sync_message,
+    ]
+
+    if payload.fresh_user_message:
+        parts.extend(
+            [
+                "Fresh user message from the user (verbatim):",
+                VERBATIM_BEGIN,
+                payload.fresh_user_message,
+                VERBATIM_END,
+            ]
+        )
+
+    return "\n\n".join(parts).strip() + "\n"
+
+
+def build_request_mutation_prompt(stdin_text: str) -> str:
+    payload = parse_request_mutation_payload(stdin_text)
+    parts = [
+        load_prompt_asset("request-mutation.md"),
+        "Approved mutation from Claude:",
+        payload.approved_mutation,
+    ]
+
+    if payload.fresh_user_message:
+        parts.extend(
+            [
+                "Fresh user message from the user (verbatim):",
+                VERBATIM_BEGIN,
+                payload.fresh_user_message,
+                VERBATIM_END,
+            ]
+        )
+
+    return "\n\n".join(parts).strip() + "\n"
+
+
+def validate_init_reply(mode: str, reply: str) -> str:
+    try:
+        obj = json.loads(reply)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Init reply must be valid JSON: {exc.msg}") from exc
+
+    if not isinstance(obj, dict):
+        raise ValueError("Init reply must be a JSON object.")
+
+    expected_field = INIT_TASK_REPLY_FIELD if mode == "task" else INIT_RECOVERY_REPLY_FIELD
+    if set(obj.keys()) != {expected_field}:
+        raise ValueError(f"Init reply must contain exactly one top-level field: {expected_field}.")
+
+    value = obj.get(expected_field)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"Init reply field {expected_field} must be a non-empty string.")
+
+    return json.dumps({expected_field: value}, ensure_ascii=False, indent=2)
+
+
+def validate_review_my_plan_reply(reply: str) -> str:
+    try:
+        obj = json.loads(reply)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"review-my-plan reply must be valid JSON: {exc.msg}") from exc
+
+    if not isinstance(obj, dict):
+        raise ValueError("review-my-plan reply must be a JSON object.")
+
+    if set(obj.keys()) != {REVIEW_PLAN_APPROVED_FIELD, REVIEW_PLAN_REPLY_FIELD}:
+        raise ValueError(
+            "review-my-plan reply must contain exactly these top-level fields: "
+            "approved_to_mutate, plan_review_reply."
+        )
+
+    approved = obj.get(REVIEW_PLAN_APPROVED_FIELD)
+    reply_text = obj.get(REVIEW_PLAN_REPLY_FIELD)
+
+    if not isinstance(approved, bool):
+        raise ValueError("review-my-plan field approved_to_mutate must be a boolean.")
+    if not isinstance(reply_text, str) or not reply_text.strip():
+        raise ValueError("review-my-plan field plan_review_reply must be a non-empty string.")
+
+    return json.dumps(
+        {
+            REVIEW_PLAN_APPROVED_FIELD: approved,
+            REVIEW_PLAN_REPLY_FIELD: reply_text,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+def validate_review_my_work_reply(reply: str) -> str:
+    try:
+        obj = json.loads(reply)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"review-my-work reply must be valid JSON: {exc.msg}") from exc
+
+    if not isinstance(obj, dict):
+        raise ValueError("review-my-work reply must be a JSON object.")
+
+    if set(obj.keys()) != {REVIEW_WORK_APPROVED_FIELD, REVIEW_WORK_REPLY_FIELD}:
+        raise ValueError(
+            "review-my-work reply must contain exactly these top-level fields: "
+            "approved_work, work_review_reply."
+        )
+
+    approved = obj.get(REVIEW_WORK_APPROVED_FIELD)
+    reply_text = obj.get(REVIEW_WORK_REPLY_FIELD)
+
+    if not isinstance(approved, bool):
+        raise ValueError("review-my-work field approved_work must be a boolean.")
+    if not isinstance(reply_text, str) or not reply_text.strip():
+        raise ValueError("review-my-work field work_review_reply must be a non-empty string.")
+
+    return json.dumps(
+        {
+            REVIEW_WORK_APPROVED_FIELD: approved,
+            REVIEW_WORK_REPLY_FIELD: reply_text,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+def validate_work_sync_reply(reply: str) -> str:
+    try:
+        obj = json.loads(reply)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"work-sync reply must be valid JSON: {exc.msg}") from exc
+
+    if not isinstance(obj, dict):
+        raise ValueError("work-sync reply must be a JSON object.")
+
+    allowed_keys = {WORK_SYNC_REPLY_FIELD, WORK_SYNC_PLAN_FIELD}
+    unknown_keys = set(obj.keys()) - allowed_keys
+    if unknown_keys:
+        raise ValueError(f"work-sync reply has unsupported fields: {', '.join(sorted(unknown_keys))}")
+
+    if WORK_SYNC_REPLY_FIELD not in obj:
+        raise ValueError("work-sync reply must contain discussion_reply.")
+
+    discussion_reply = obj.get(WORK_SYNC_REPLY_FIELD)
+    if not isinstance(discussion_reply, str) or not discussion_reply.strip():
+        raise ValueError("work-sync field discussion_reply must be a non-empty string.")
+
+    normalized: dict[str, str] = {WORK_SYNC_REPLY_FIELD: discussion_reply}
+
+    if WORK_SYNC_PLAN_FIELD in obj:
+        plan = obj.get(WORK_SYNC_PLAN_FIELD)
+        if not isinstance(plan, str) or not plan.strip():
+            raise ValueError("work-sync field plan must be a non-empty string when provided.")
+        normalized[WORK_SYNC_PLAN_FIELD] = plan
+
+    return json.dumps(normalized, ensure_ascii=False, indent=2)
+
+
+def build_prompt(tool: str, stdin_text: str) -> str:
+    if tool == "init":
+        prompt, _mode = build_init_prompt(stdin_text)
+        return prompt
+    if tool == "chat":
+        return build_chat_prompt(stdin_text)
+    if tool == "review-my-plan":
+        return build_review_my_plan_prompt(stdin_text)
+    if tool == "review-my-work":
+        return build_review_my_work_prompt(stdin_text)
+    if tool == "work-sync":
+        return build_work_sync_prompt(stdin_text)
+    if tool == "request-mutation":
+        return build_request_mutation_prompt(stdin_text)
+    raise ValueError(f"Unsupported tool: {tool}")
 
 
 def safe_json_loads(line: str) -> Optional[dict]:
@@ -542,8 +922,6 @@ def main() -> int:
         raise RuntimeError("\n".join(lines))
 
     session_id = None if args.new_session else read_session_id(repo_root)
-    include_role_card = session_id is None
-
     stdin_text = sys.stdin.read()
     if not stdin_text.strip():
         eprint("Empty input. Provide content via stdin.")
@@ -551,9 +929,13 @@ def main() -> int:
 
     model = args.model or DEFAULT_MODEL
     reasoning_effort = args.reasoning_effort or DEFAULT_REASONING_EFFORT
+    init_mode: Optional[str] = None
 
     try:
-        prompt = build_prompt(args.cmd, stdin_text, include_role_card=include_role_card)
+        if args.cmd == "init":
+            prompt, init_mode = build_init_prompt(stdin_text)
+        else:
+            prompt = build_prompt(args.cmd, stdin_text)
         result = run_codex(
             repo_root=repo_root,
             session_id=session_id,
@@ -568,6 +950,31 @@ def main() -> int:
 
     write_session_id(repo_root, result.session_id)
     try_promote_exec_session_to_cli(result.session_id)
+
+    if init_mode is not None:
+        try:
+            result.reply = validate_init_reply(init_mode, result.reply)
+        except Exception as exc:
+            eprint(str(exc))
+            return 1
+    elif args.cmd == "review-my-plan":
+        try:
+            result.reply = validate_review_my_plan_reply(result.reply)
+        except Exception as exc:
+            eprint(str(exc))
+            return 1
+    elif args.cmd == "review-my-work":
+        try:
+            result.reply = validate_review_my_work_reply(result.reply)
+        except Exception as exc:
+            eprint(str(exc))
+            return 1
+    elif args.cmd == "work-sync":
+        try:
+            result.reply = validate_work_sync_reply(result.reply)
+        except Exception as exc:
+            eprint(str(exc))
+            return 1
 
     sys.stdout.write(result.reply.rstrip() + "\n")
     return 0

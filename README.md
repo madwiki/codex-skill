@@ -1,6 +1,6 @@
 # codex-skill
 
-A Claude Skill that lets Claude Code collaborate with a persistent local Codex session.
+A Claude Skill that lets Claude Code collaborate with a local Codex session, resuming prior context when available and falling back cleanly when it is not.
 
 ## Install
 
@@ -13,10 +13,12 @@ git clone https://github.com/madwiki/codex-skill ~/.claude/skills/codex-skill
 
 ## What it does
 
-- Persists and reuses the Codex session id via `<repo>/.claude/codex_session.json`
-- Requires a persistence bootstrap on skill load: verify durable memory/`CLAUDE.md` contains the reload + recovery-sync + subtask-guide rule, and add it if missing
-- Requires a recovery chat after compaction, context reset, model restart, or memory recovery: ask Codex to reconstruct current goal, mutation owner, last agreed plan, last completed step, pending review, next step, and risks before continuing
-- Treats `chat` as the shared collaboration path for context sync, disagreements, and consensus-building
+- Persists and reuses the Codex session id via `<repo>/.claude/codex_session.json` when recovery is available
+- Requires a persistence bootstrap on skill load: verify durable memory/`CLAUDE.md` contains the reload + init + subtask-guide rule, and add it if missing
+- Uses `init` as the bootstrap entrypoint for a new shared task or after Claude returns from compact or context clear
+- Avoids resending durable background every turn; normal ongoing calls send only changed context and the current approved step
+- Uses `chat` as the Claude-mutates discussion surface for context sync, disagreements, and consensus-building
+- Uses `work-sync` as the Codex-mutates sync surface for discussion, candidate plan output, and response to Claude review
 - Supports two mutation-owner workflows:
   - Claude-mutates: Claude changes state; Codex reviews Claude's plan/work
   - Codex-mutates: Codex changes state in small approved steps; Claude reviews between steps
@@ -27,7 +29,11 @@ git clone https://github.com/madwiki/codex-skill ~/.claude/skills/codex-skill
 
 ## Entrypoints
 
-Shared:
+Bootstrap:
+
+- `bin/codex-skill-init`
+
+Claude-mutates discussion:
 
 - `bin/codex-skill-chat`
 
@@ -38,16 +44,15 @@ Claude-mutates:
 
 Codex-mutates:
 
-- `bin/codex-skill-request-plan`
+- `bin/codex-skill-work-sync`
 - `bin/codex-skill-request-mutation`
-- `bin/codex-skill-review-your-work`
 
 ## Docs
 
 - `SKILL.md`
+- `init.md`
 - `chat.md`
+- `work-sync.md`
 - `review-my-plan.md`
 - `review-my-work.md`
-- `request-plan.md`
 - `request-mutation.md`
-- `review-your-work.md`

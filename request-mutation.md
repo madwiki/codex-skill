@@ -1,69 +1,60 @@
 # request-mutation
 
-Use this in **Codex-mutates** mode after Claude and Codex have reached consensus on exactly one small state-changing step.
+Use this in **Codex-mutates** mode after Claude has read Codex's `plan` from `work-sync.md` and explicitly approves one small state-changing step.
 
 Codex owns mutation for this step. Codex should perform only the approved step, self-check, report evidence, and stop for Claude review.
 
 ## When to use
 
-- Codex prepared a plan and Claude agreed on the next small step
-- A prior Codex step needs one approved repair step
-- The task should proceed incrementally with Claude review between steps
+- Codex proposed a candidate `plan` in `work-sync.md` and Claude now approves one concrete step from it
+- A prior Codex mutation needs one approved follow-up repair step
+- The task should proceed incrementally with Claude review between mutation steps
 
 ## Collaboration rules
 
-- Run the persistence bootstrap in `SKILL.md` first: verify durable memory/`CLAUDE.md` contains the reload + recovery-sync + subtask-guide rule, and add it if missing.
-- If this call follows compaction, context reset, model restart, or memory recovery, use `chat.md` for recovery sync before authorizing mutation.
-- State clearly that the current mode is Codex-mutates and name the single approved step.
-- Include stopping conditions and anything Codex must not touch.
-- Codex must not continue into the next feature/stage after finishing the approved step.
+- Run the persistence bootstrap in `SKILL.md` first: verify durable memory/`CLAUDE.md` contains the reload + init + subtask-guide rule, and add it if missing.
+- For a new shared task, or after compact/context clear, run `init.md` before authorizing mutation.
+- This is the only mutation-permission turn in the Codex-mutates workflow.
+- Claude must approve exactly one mutation step in this call.
+- Codex must not continue into the next feature or stage after finishing the approved step.
 - Codex must not commit, push, release, deploy, or perform external-state actions unless this exact call explicitly authorizes that action.
 - Codex must self-check facts and whole-system coherence before reporting the step complete.
-- After Codex responds, Claude reviews independently by reading/searching/verifying before approving the next step.
+- After Codex responds, Claude reviews independently by reading/searching/verifying. If more discussion is needed, Claude returns to `work-sync.md`.
 
-## Message template
+## Input contract
 
-```text
-## Background
-<Durable project/task context Codex needs.>
+Call `request-mutation` with JSON on stdin.
 
-## Current turn context
-- What Claude told the user:
-- What the user said since the last Codex call, if anything:
-- Why the user said it / surrounding situation:
-- What Claude and Codex agreed:
-- Current state:
+Required:
 
-## Optional fresh user message
-<<<USER_MESSAGE_VERBATIM_BEGIN>>>
-<copy/paste the user's exact words only when fresh user text exists>
-<<<USER_MESSAGE_VERBATIM_END>>>
-
-## Mutation ownership
-Mode: Codex-mutates.
-Codex may mutate only the approved step below.
-
-## Approved mutation step
-- Step:
-- Scope:
-- Files/modules likely involved:
-- Do not touch:
-- Required self-check:
-- Required fact-check / coherence check:
-- Stop condition:
-
-## Claude message to Codex
-- Execute only this step:
-- Report changed files/state:
-- Report evidence, tests, and self-review:
-- Report fact-check and whole-system coherence findings:
-- Stop and wait for Claude review:
+```json
+{
+  "approved_mutation": "Describe the single approved mutation step here."
+}
 ```
 
-If there is no fresh user message, remove the entire `Optional fresh user message` section.
+Optional addition:
+
+```json
+{
+  "approved_mutation": "Describe the single approved mutation step here.",
+  "fresh_user_message": "Only if the user actually said new words that matter for this mutation."
+}
+```
+
+Rules:
+
+- `approved_mutation` is required
+- `fresh_user_message` is optional
+- no other top-level fields are accepted
+- `approved_mutation` should contain the step boundary, any relevant constraints, and the instruction to stop after this step for Claude review
+
+## Output
+
+Codex replies in normal text. The reply should report what changed, what was verified, any fact or coherence concerns, and where Codex stopped.
 
 ## Run
 
 ```bash
-<skill_root>/bin/codex-skill-request-mutation < message.txt
+<skill_root>/bin/codex-skill-request-mutation < request-mutation.json
 ```
