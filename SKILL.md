@@ -33,10 +33,12 @@ Use `init.md` to bootstrap Codex collaboration in exactly two cases:
 
 `init` is not a discussion turn and not a mutation turn. Claude must send exactly one init input shape:
 
-- `task_background`: for a new task brief
-- `recovery_background`: for tentative recovered context after compact/context clear
+- `task_background` plus `mutation_owner`: for a new task brief
+- `recovery_background` plus `mutation_owner`: for tentative recovered context after compact/context clear
 
-`init` privately injects the Codex collaboration protocol. Claude does not need to restate the peer relationship, review discipline, or disagreement protocol in the init payload.
+`mutation_owner` must be exactly `claude` or `codex`.
+
+`init` privately injects the Codex collaboration protocol and the role-specific framing for the chosen mutation-owner path. Claude does not need to restate the peer relationship, review discipline, disagreement protocol, or path-specific Codex role in the init payload.
 
 After `init`, Claude resumes the appropriate workflow based on Codex's reply. That may be `chat.md`, `review-my-plan.md`, `review-my-work.md`, `work-sync.md`, or `request-mutation.md`, depending on the chosen mutation-owner path and task state.
 
@@ -105,7 +107,7 @@ Every Codex call should feel like the next message in the same collaboration thr
 
 - Background is optional. Include durable task/project context on the first call of a task, when it changed, or when Codex lacks context needed for review. Do not resend stable background every round.
 - In Codex-mutates mode, `work-sync.md` handles discussion and candidate plan output. `request-mutation.md` should normally include only the approved mutation step plus any fresh user message that matters for that step.
-- In Claude-mutates mode, Claude may include enough background for Codex to review Claude's plan or work, because Claude owns the changes. After Claude compact/context clear, first run `init.md` with `recovery_background`, then continue.
+- In Claude-mutates mode, Claude may include enough background for Codex to review Claude's plan or work, because Claude owns the changes. After Claude compact/context clear, first run `init.md` with `recovery_background` plus `mutation_owner: "claude"`, then continue.
 - Current turn context explains what happened since the last Codex reply: what Claude told the user, what the user said, what Claude did, what changed, and what Claude now believes.
 - Include verbatim user text only when the user actually said something new since the last Codex call. If there is no fresh user message, omit the block entirely.
 - When verbatim user text is included, explain why the user said it and what situation surrounded it.

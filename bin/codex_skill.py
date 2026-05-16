@@ -25,6 +25,9 @@ VERBATIM_BEGIN = "<<<USER_MESSAGE_VERBATIM_BEGIN>>>"
 VERBATIM_END = "<<<USER_MESSAGE_VERBATIM_END>>>"
 INIT_TASK_FIELD = "task_background"
 INIT_RECOVERY_FIELD = "recovery_background"
+INIT_MUTATION_OWNER_FIELD = "mutation_owner"
+INIT_MUTATION_OWNER_CLAUDE = "claude"
+INIT_MUTATION_OWNER_CODEX = "codex"
 INIT_TASK_REPLY_FIELD = "task_understanding_reply"
 INIT_RECOVERY_REPLY_FIELD = "context_recovery_reply"
 REVIEW_PLAN_FIELD = "plan_for_review"
@@ -146,6 +149,7 @@ def write_session_id(repo_root: Path, session_id: str) -> None:
 class InitPayload:
     mode: str
     background: str
+    mutation_owner: str
 
 
 @dataclass(frozen=True)
@@ -183,7 +187,10 @@ class RequestMutationPayload:
 def parse_init_payload(stdin_text: str) -> InitPayload:
     text = stdin_text.replace("\r\n", "\n").replace("\r", "\n").strip()
     if not text:
-        raise ValueError("Init input is empty. Provide JSON with exactly one of: task_background or recovery_background.")
+        raise ValueError(
+            "Init input is empty. Provide JSON with exactly one of: task_background or "
+            "recovery_background, plus mutation_owner."
+        )
 
     try:
         obj = json.loads(text)
@@ -193,22 +200,38 @@ def parse_init_payload(stdin_text: str) -> InitPayload:
     if not isinstance(obj, dict):
         raise ValueError("Init input must be a JSON object.")
 
-    if len(obj) != 1:
-        raise ValueError("Init input must contain exactly one top-level field: task_background or recovery_background.")
+    allowed_keys = {
+        INIT_TASK_FIELD,
+        INIT_RECOVERY_FIELD,
+        INIT_MUTATION_OWNER_FIELD,
+    }
+    unknown_keys = set(obj.keys()) - allowed_keys
+    if unknown_keys:
+        raise ValueError(f"Init input has unsupported fields: {', '.join(sorted(unknown_keys))}")
+
+    background_keys = [key for key in (INIT_TASK_FIELD, INIT_RECOVERY_FIELD) if key in obj]
+    if len(background_keys) != 1:
+        raise ValueError("Init input must contain exactly one of: task_background or recovery_background.")
 
     if INIT_TASK_FIELD in obj:
         value = obj[INIT_TASK_FIELD]
         mode = "task"
-    elif INIT_RECOVERY_FIELD in obj:
+    else:
         value = obj[INIT_RECOVERY_FIELD]
         mode = "recovery"
-    else:
-        raise ValueError("Init input must contain exactly one of: task_background or recovery_background.")
 
     if not isinstance(value, str) or not value.strip():
         raise ValueError("Init background must be a non-empty string.")
 
-    return InitPayload(mode=mode, background=value.strip())
+    mutation_owner = obj.get(INIT_MUTATION_OWNER_FIELD)
+    if mutation_owner not in {INIT_MUTATION_OWNER_CLAUDE, INIT_MUTATION_OWNER_CODEX}:
+        raise ValueError("Init field mutation_owner must be exactly 'claude' or 'codex'.")
+
+    return InitPayload(
+        mode=mode,
+        background=value.strip(),
+        mutation_owner=mutation_owner,
+    )
 
 
 def parse_review_my_plan_payload(stdin_text: str) -> ReviewMyPlanPayload:
@@ -409,10 +432,18 @@ def load_prompt_asset(name: str) -> str:
 def build_init_prompt(stdin_text: str) -> tuple[str, str]:
     payload = parse_init_payload(stdin_text)
     if payload.mode == "task":
-        prompt_name = "init-task.md"
+        prompt_name = (
+            "init-task-claude.md"
+            if payload.mutation_owner == INIT_MUTATION_OWNER_CLAUDE
+            else "init-task-codex.md"
+        )
         label = "Task background from Claude:"
     else:
-        prompt_name = "init-recovery.md"
+        prompt_name = (
+            "init-recovery-claude.md"
+            if payload.mutation_owner == INIT_MUTATION_OWNER_CLAUDE
+            else "init-recovery-codex.md"
+        )
         label = "Recovery background from Claude:"
 
     prompt = "\n\n".join(

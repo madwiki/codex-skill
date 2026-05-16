@@ -11,13 +11,14 @@ Claude should call `init` in two cases:
 
 ## Input contract
 
-Call `init` with JSON on stdin. The JSON must contain exactly one top-level field.
+Call `init` with JSON on stdin. The JSON must contain exactly one background field plus `mutation_owner`.
 
 New task:
 
 ```json
 {
-  "task_background": "Summarize the new task background for Codex here."
+  "task_background": "Summarize the new task background for Codex here.",
+  "mutation_owner": "claude"
 }
 ```
 
@@ -25,7 +26,8 @@ Recovery:
 
 ```json
 {
-  "recovery_background": "Summarize Claude's tentative recovered background here."
+  "recovery_background": "Summarize Claude's tentative recovered background here.",
+  "mutation_owner": "codex"
 }
 ```
 
@@ -33,7 +35,8 @@ Rules:
 
 - `task_background` and `recovery_background` are mutually exclusive
 - one of them is required
-- `init` privately injects the Codex collaboration protocol; Claude does not need to restate it in the input payload
+- `mutation_owner` is required and must be exactly `claude` or `codex`
+- `init` privately injects the Codex collaboration protocol plus the role-specific path framing for the chosen mutation owner; Claude does not need to restate that in the input payload
 - after `init`, Claude resumes the appropriate path:
   - `chat.md` / `review-my-plan.md` / `review-my-work.md` for Claude-mutates
   - `work-sync.md` / `request-mutation.md` for Codex-mutates
@@ -48,7 +51,7 @@ If the input used `task_background`, Codex must return:
 }
 ```
 
-That reply should tell Claude what Codex understands about the task, what risks or disagreements stand out, what collaboration path seems more appropriate if that is already apparent, and what Claude should know before continuing.
+That reply should tell Claude what Codex understands about the task, what risks or disagreements stand out, whether the chosen mutation-owner path looks problematic, and what Claude should know before continuing.
 
 If the input used `recovery_background`, Codex must return:
 
@@ -58,7 +61,7 @@ If the input used `recovery_background`, Codex must return:
 }
 ```
 
-That reply should tell Claude what Codex can recover, what remains uncertain, and where the workflow should resume, including which path or command seems appropriate next if Codex can tell.
+That reply should tell Claude what Codex can recover, what remains uncertain, and where the workflow should resume on the chosen mutation-owner path, including which command seems appropriate next if Codex can tell.
 
 If Codex does not have trustworthy prior context to add, it should say so plainly instead of pretending recovery happened.
 

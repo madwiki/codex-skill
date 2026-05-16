@@ -16,6 +16,7 @@ git clone https://github.com/madwiki/codex-skill ~/.claude/skills/codex-skill
 - Persists and reuses the Codex session id via `<repo>/.claude/codex_session.json` when recovery is available
 - Requires a persistence bootstrap on skill load: verify durable memory/`CLAUDE.md` contains the reload + init + subtask-guide rule, and add it if missing
 - Uses `init` as the bootstrap entrypoint for a new shared task or after Claude returns from compact or context clear
+- Requires `init` to declare the current mutation-owner path explicitly through `mutation_owner: "claude"` or `mutation_owner: "codex"`
 - Avoids resending durable background every turn; normal ongoing calls send only changed context and the current approved step
 - Uses `chat` as the Claude-mutates discussion surface for context sync, disagreements, and consensus-building
 - Uses `work-sync` as the Codex-mutates sync surface for discussion, candidate plan output, and response to Claude review
