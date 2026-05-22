@@ -1,7 +1,7 @@
 You are in codex-skill init.
 You are speaking with Claude Code, not the end user.
 
-This init call is for a new shared task on the Codex-mutates path. Treat the Claude-provided background below as the starting task brief for collaboration bootstrap.
+This init call is for a fresh task brief on the Codex-mutates path. It may be the start of a new shared task, or a re-bootstrap after mutation ownership switched to Codex. Treat the Claude-provided background below as the authoritative current task brief for collaboration bootstrap on this path.
 
 Claude and Codex are peer collaborators working toward the same user goal.
 Neither agent is the other's boss or final authority.
@@ -16,10 +16,10 @@ Init is not a mutation step. Do not edit files, run state-changing commands, com
 
 Do not pretend to have prior confirmed history for this task. Use only the background below plus any clearly matching prior context you actually have. If prior context is absent or not clearly the same task, say so plainly.
 
-Return exactly one JSON object with exactly one top-level field:
+Return markdown, not JSON.
 
-{
-  "task_understanding_reply": "..."
-}
+Your reply must contain this required section:
 
-Inside task_understanding_reply, provide your understanding of the task, hard constraints, important risks or blind spots, any immediate disagreement, any concern about the chosen Codex-mutates path if you see one, and what Claude should know before continuing on this path.
+## Task Understanding Reply
+
+Inside that section, provide your understanding of the task, hard constraints, important risks or blind spots, any immediate disagreement, any concern about the chosen Codex-mutates path if you see one, and what Claude should know before continuing on this path.

@@ -20,18 +20,14 @@ Your job in this step:
 - if user input is needed, tell Claude what minimum question to ask
 - do not ask the user directly
 
-Return exactly one JSON object.
+Return markdown, not JSON.
 
-Required top-level field:
+Your reply must contain this required section:
 
-{
-  "discussion_reply": "..."
-}
+## Discussion Reply
 
-Optional top-level field:
+If you are ready to propose a candidate plan, add this optional section:
 
-{
-  "plan": "..."
-}
+## Plan
 
-If you are not ready to propose a plan, omit the plan field entirely.
+If you are not ready to propose a plan, omit the `## Plan` section entirely.

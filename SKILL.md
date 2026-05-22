@@ -1,7 +1,7 @@
 ---
 name: codex-skill
 description: >
-  Every new shared task, and every return from compact or context clear, must load /codex-skill and run init before continuing collaborative coding work.
+  Every new shared task, every return from compact or context clear, and every mutation-owner path reversal must load /codex-skill and run init before continuing collaborative coding work.
   On load, first verify durable memory or CLAUDE.md contains the reload rule, init rule, and instruction to load subtask guide MD files only when needed; add or update it if missing.
   Use /codex-skill to coordinate with a Codex peer collaborator whose prior session context may be recoverable or may be fresh for this task, for context sync, disagreements, consensus-building,
   new-task kickoff, user-facing decision preparation, and Claude-mutates or Codex-mutates workflows.
@@ -17,19 +17,20 @@ Codex is invoked by Claude; Codex does not speak to the user directly. Claude re
 
 This is the first required action every time this skill is loaded, before choosing `chat`, planning, mutating, reviewing, or declaring completion.
 
-1. Check durable project memory and the nearest applicable `CLAUDE.md` for a concrete rule that says: on a new shared task, and after compact or context clear, Claude must reload `codex-skill` and run `init` before continuing collaborative coding work.
+1. Check durable project memory and the nearest applicable `CLAUDE.md` for a concrete rule that says: on a new shared task, after compact or context clear, and whenever mutation ownership reverses between Claude and Codex, Claude must reload `codex-skill` and run `init` before continuing collaborative coding work.
 2. If the rule is missing, add or update the smallest durable reminder in project memory if available; otherwise update or create the nearest project `CLAUDE.md` allowed by workspace policy.
-3. The durable reminder must also say to run `init` before planning, chatting, mutating, reviewing, or declaring completion when Claude is entering a new shared task or returning from compact/context clear, and to load the subtask guide MD files only when the workflow needs them.
-4. The reminder should be concrete, for example: `On every new shared task, and after compact or context clear, reload codex-skill and run init before continuing collaborative coding work. Follow SKILL.md first and load subtask guide MD files only when that workflow is needed. Claude and Codex must continue the collaboration protocol instead of working solo.`
+3. The durable reminder must also say to run `init` before planning, chatting, mutating, reviewing, or declaring completion when Claude is entering a new shared task, returning from compact/context clear, or switching mutation ownership between Claude and Codex, and to load the subtask guide MD files only when the workflow needs them.
+4. The reminder should be concrete, for example: `On every new shared task, after compact or context clear, and whenever mutation ownership switches between Claude and Codex, reload codex-skill and run init before continuing collaborative coding work. Follow SKILL.md first and load subtask guide MD files only when that workflow is needed. Claude and Codex must continue the collaboration protocol instead of working solo.`
 5. This bootstrap is a protocol-preservation write. It is allowed before selecting Claude-mutates or Codex-mutates mode, but it must be narrowly scoped to memory/`CLAUDE.md` and must not modify task files.
 6. If durable storage is ambiguous or workspace policy forbids the write, ask the user where to store the reminder before continuing collaborative work.
 
 ## Init
 
-Use `init.md` to bootstrap Codex collaboration in exactly two cases:
+Use `init.md` to bootstrap Codex collaboration in exactly three cases:
 
 - a new shared task is starting and Claude wants to brief Codex on the task background
 - Claude has just returned from compact or context clear and wants Codex to help recover the working context
+- the task is switching mutation-owner path and Claude needs to re-bootstrap Codex under the new path before continuing
 
 `init` is not a discussion turn and not a mutation turn. Claude must send exactly one init input shape:
 
@@ -42,6 +43,8 @@ Use `init.md` to bootstrap Codex collaboration in exactly two cases:
 
 After `init`, Claude resumes the appropriate workflow based on Codex's reply. That may be `chat.md`, `review-my-plan.md`, `review-my-work.md`, `work-sync.md`, or `request-mutation.md`, depending on the chosen mutation-owner path and task state.
 
+If mutation ownership reverses during the same task segment, stop the old path, rerun `init` with the new `mutation_owner`, and only then continue on the new path.
+
 ## Core model
 
 Claude and Codex are peers in judgment. The modes below define only **mutation ownership**: which agent is allowed to perform state-changing work in the workspace or external systems.
@@ -49,6 +52,12 @@ Claude and Codex are peers in judgment. The modes below define only **mutation o
 State-changing work includes file edits, generated artifacts, write-formatters, dependency changes, migrations, commands that update snapshots/caches/databases/services, commits, pushes, releases, deploys, and any command that changes external state.
 
 Both agents may do read-only investigation in any mode: read files, search the repository, inspect diffs, inspect docs, reason about tests, and verify claims. If a command might write or affect shared state, it belongs to the mutation owner for the current mode.
+
+The wrapper also enforces a sandbox policy:
+
+- `init.md`, `chat.md`, `review-my-plan.md`, `review-my-work.md`, and `work-sync.md` run with `read-only`
+- `request-mutation.md` runs with `workspace-write` by default
+- if Claude decides the approved mutation step genuinely needs more than the default mutation sandbox, Claude may resend `request-mutation.md` with `sandbox_mode: "full-access"`, which maps to `danger-full-access`
 
 Do not repeat the full peer-collaboration charter in every ordinary Codex call. Establish it through `init` when the shared task begins, and again when Claude returns from compact or context clear, then continue with concise task-specific briefs.
 
@@ -85,7 +94,7 @@ Use the guide whose name matches the current workflow.
 
 ## Codex-mutates loop
 
-1. On a new shared task, and after compact or context clear, run `init.md` first.
+1. On a new shared task, after compact or context clear, and whenever switching into Codex-mutates from Claude-mutates, run `init.md` first.
 2. Use `work-sync.md` for every non-mutation turn: discussion, disagreement, plan output, plan correction, or Codex's response to Claude's review of prior mutation work.
 3. If Codex includes a candidate `plan` in `work-sync.md` and Claude agrees on one step, use `request-mutation.md` for exactly one approved mutation.
 4. Claude reviews the mutation result independently by reading/searching/verifying.
@@ -94,7 +103,7 @@ Use the guide whose name matches the current workflow.
 
 ## Claude-mutates loop
 
-1. On a new shared task, and after compact or context clear, run `init.md` first.
+1. On a new shared task, after compact or context clear, and whenever switching into Claude-mutates from Codex-mutates, run `init.md` first.
 2. Use `chat.md` until the broad direction is understood.
 3. Use `review-my-plan.md` before Claude performs meaningful state-changing work.
 4. If Codex disagrees, use `chat.md` to resolve the disagreement or prepare a user decision.

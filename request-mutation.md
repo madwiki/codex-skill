@@ -38,7 +38,8 @@ Optional addition:
 ```json
 {
   "approved_mutation": "Describe the single approved mutation step here.",
-  "fresh_user_message": "Only if the user actually said new words that matter for this mutation."
+  "fresh_user_message": "Only if the user actually said new words that matter for this mutation.",
+  "sandbox_mode": "full-access"
 }
 ```
 
@@ -46,8 +47,12 @@ Rules:
 
 - `approved_mutation` is required
 - `fresh_user_message` is optional
+- `sandbox_mode` is optional
 - no other top-level fields are accepted
 - `approved_mutation` should contain the step boundary, any relevant constraints, and the instruction to stop after this step for Claude review
+- if `sandbox_mode` is omitted, the wrapper uses the default mutation sandbox: `workspace-write`
+- if Claude decides the default mutation sandbox is too restrictive for this approved step, Claude may resend the request with `sandbox_mode: "full-access"`
+- `sandbox_mode` may only be `default` or `full-access`
 
 ## Output
 

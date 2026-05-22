@@ -19,9 +19,16 @@ Your job in this step:
 - if fixes, clarification, or user resolution are still needed, return approved_work: false
 - do not ask the user directly
 
-Return exactly one JSON object with exactly these top-level fields:
+Return markdown, not JSON.
 
-{
-  "approved_work": true,
-  "work_review_reply": "..."
-}
+The first non-empty line must be exactly:
+
+approved_work: true
+
+or:
+
+approved_work: false
+
+Then include this required section:
+
+## Work Review Reply

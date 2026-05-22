@@ -53,20 +53,32 @@ Rules:
 
 ## Output contract
 
-Codex must return exactly one JSON object with exactly these top-level fields:
+Codex replies in markdown, not JSON.
 
-```json
-{
-  "approved_work": true,
-  "work_review_reply": "..."
-}
+The first non-empty line must be:
+
+```md
+approved_work: true
+```
+
+or:
+
+```md
+approved_work: false
+```
+
+Then Codex must include this required section:
+
+```md
+## Work Review Reply
+...
 ```
 
 Meaning:
 
 - `approved_work: true` means Claude may treat the reviewed work as accepted
 - `approved_work: false` means Claude must not treat the work as accepted yet
-- `work_review_reply` contains Codex's reasoning, blockers, risks, disagreement, requested fixes, and any minimum user decision if needed
+- `## Work Review Reply` contains Codex's reasoning, blockers, risks, disagreement, requested fixes, and any minimum user decision if needed
 
 ## Run
 

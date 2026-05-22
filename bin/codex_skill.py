@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -28,26 +29,32 @@ INIT_RECOVERY_FIELD = "recovery_background"
 INIT_MUTATION_OWNER_FIELD = "mutation_owner"
 INIT_MUTATION_OWNER_CLAUDE = "claude"
 INIT_MUTATION_OWNER_CODEX = "codex"
-INIT_TASK_REPLY_FIELD = "task_understanding_reply"
-INIT_RECOVERY_REPLY_FIELD = "context_recovery_reply"
 REVIEW_PLAN_FIELD = "plan_for_review"
 REVIEW_PLAN_NEW_INFO_FIELD = "new_information"
 REVIEW_PLAN_FRESH_USER_FIELD = "fresh_user_message"
 REVIEW_PLAN_APPROVED_FIELD = "approved_to_mutate"
-REVIEW_PLAN_REPLY_FIELD = "plan_review_reply"
 REVIEW_WORK_FIELD = "work_for_review"
 REVIEW_WORK_NEW_INFO_FIELD = "new_information"
 REVIEW_WORK_FRESH_USER_FIELD = "fresh_user_message"
 REVIEW_WORK_APPROVED_FIELD = "approved_work"
-REVIEW_WORK_REPLY_FIELD = "work_review_reply"
 CHAT_MESSAGE_FIELD = "message_for_codex"
 CHAT_FRESH_USER_FIELD = "fresh_user_message"
 WORK_SYNC_MESSAGE_FIELD = "sync_message"
 WORK_SYNC_FRESH_USER_FIELD = "fresh_user_message"
-WORK_SYNC_REPLY_FIELD = "discussion_reply"
-WORK_SYNC_PLAN_FIELD = "plan"
 REQUEST_MUTATION_FIELD = "approved_mutation"
 REQUEST_MUTATION_FRESH_USER_FIELD = "fresh_user_message"
+REQUEST_MUTATION_SANDBOX_MODE_FIELD = "sandbox_mode"
+REQUEST_MUTATION_SANDBOX_DEFAULT = "default"
+REQUEST_MUTATION_SANDBOX_FULL_ACCESS = "full-access"
+INIT_TASK_REPLY_TITLE = "Task Understanding Reply"
+INIT_RECOVERY_REPLY_TITLE = "Context Recovery Reply"
+REVIEW_PLAN_REPLY_TITLE = "Plan Review Reply"
+REVIEW_WORK_REPLY_TITLE = "Work Review Reply"
+WORK_SYNC_REPLY_TITLE = "Discussion Reply"
+WORK_SYNC_PLAN_TITLE = "Plan"
+SANDBOX_READ_ONLY = "read-only"
+SANDBOX_WORKSPACE_WRITE = "workspace-write"
+SANDBOX_DANGER_FULL_ACCESS = "danger-full-access"
 
 TOOL_HELP = {
     "init": "Bootstrap Codex collaboration for a new task or recovery sync (reads JSON from stdin).",
@@ -182,6 +189,7 @@ class WorkSyncPayload:
 class RequestMutationPayload:
     approved_mutation: str
     fresh_user_message: Optional[str]
+    sandbox_mode: str
 
 
 def parse_init_payload(stdin_text: str) -> InitPayload:
@@ -397,7 +405,11 @@ def parse_request_mutation_payload(stdin_text: str) -> RequestMutationPayload:
     if not isinstance(obj, dict):
         raise ValueError("request-mutation input must be a JSON object.")
 
-    allowed_keys = {REQUEST_MUTATION_FIELD, REQUEST_MUTATION_FRESH_USER_FIELD}
+    allowed_keys = {
+        REQUEST_MUTATION_FIELD,
+        REQUEST_MUTATION_FRESH_USER_FIELD,
+        REQUEST_MUTATION_SANDBOX_MODE_FIELD,
+    }
     unknown_keys = set(obj.keys()) - allowed_keys
     if unknown_keys:
         raise ValueError(f"request-mutation input has unsupported fields: {', '.join(sorted(unknown_keys))}")
@@ -412,9 +424,14 @@ def parse_request_mutation_payload(stdin_text: str) -> RequestMutationPayload:
             raise ValueError("request-mutation field fresh_user_message must be a non-empty string when provided.")
         fresh_user_message = fresh_user_message.strip()
 
+    sandbox_mode = obj.get(REQUEST_MUTATION_SANDBOX_MODE_FIELD, REQUEST_MUTATION_SANDBOX_DEFAULT)
+    if sandbox_mode not in {REQUEST_MUTATION_SANDBOX_DEFAULT, REQUEST_MUTATION_SANDBOX_FULL_ACCESS}:
+        raise ValueError("request-mutation field sandbox_mode must be exactly 'default' or 'full-access' when provided.")
+
     return RequestMutationPayload(
         approved_mutation=approved_mutation.strip(),
         fresh_user_message=fresh_user_message,
+        sandbox_mode=sandbox_mode,
     )
 
 
@@ -559,8 +576,14 @@ def build_work_sync_prompt(stdin_text: str) -> str:
 
 def build_request_mutation_prompt(stdin_text: str) -> str:
     payload = parse_request_mutation_payload(stdin_text)
+    sandbox_note = (
+        "Execution sandbox for this turn: workspace-write (default mutation sandbox)."
+        if payload.sandbox_mode == REQUEST_MUTATION_SANDBOX_DEFAULT
+        else "Execution sandbox for this turn: danger-full-access (explicit full-access escalation approved by Claude)."
+    )
     parts = [
         load_prompt_asset("request-mutation.md"),
+        sandbox_note,
         "Approved mutation from Claude:",
         payload.approved_mutation,
     ]
@@ -578,122 +601,85 @@ def build_request_mutation_prompt(stdin_text: str) -> str:
     return "\n\n".join(parts).strip() + "\n"
 
 
+def resolve_codex_exec_sandbox(cmd: str, stdin_text: str) -> str:
+    if cmd == "request-mutation":
+        payload = parse_request_mutation_payload(stdin_text)
+        if payload.sandbox_mode == REQUEST_MUTATION_SANDBOX_FULL_ACCESS:
+            return SANDBOX_DANGER_FULL_ACCESS
+        return SANDBOX_WORKSPACE_WRITE
+    return SANDBOX_READ_ONLY
+
+
+def normalize_reply_text(reply: str) -> str:
+    normalized = reply.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not normalized:
+        raise ValueError("Codex reply is empty.")
+    return normalized
+
+
+def parse_required_boolean_line(reply: str, key: str) -> bool:
+    normalized = normalize_reply_text(reply)
+    for line in normalized.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        match = re.fullmatch(rf"{re.escape(key)}\s*:\s*(true|false)", stripped, flags=re.IGNORECASE)
+        if not match:
+            raise ValueError(f"{key} must be the first non-empty line and must be exactly '{key}: true' or '{key}: false'.")
+        return match.group(1).lower() == "true"
+    raise ValueError(f"{key} must be the first non-empty line and must be exactly '{key}: true' or '{key}: false'.")
+
+
+def find_markdown_heading(normalized_reply: str, title: str, start: int = 0) -> Optional[re.Match[str]]:
+    pattern = re.compile(rf"(?im)^#{{1,6}}\s+{re.escape(title)}\s*$")
+    return pattern.search(normalized_reply, pos=start)
+
+
+def require_markdown_section(reply: str, title: str, stop_titles: Optional[list[str]] = None) -> str:
+    normalized = normalize_reply_text(reply)
+    heading = find_markdown_heading(normalized, title)
+    if heading is None:
+        raise ValueError(f"Reply must contain a markdown heading: ## {title}")
+
+    content_start = heading.end()
+    content_end = len(normalized)
+    if stop_titles:
+        stop_positions: list[int] = []
+        for stop_title in stop_titles:
+            stop_heading = find_markdown_heading(normalized, stop_title, start=content_start)
+            if stop_heading is not None:
+                stop_positions.append(stop_heading.start())
+        if stop_positions:
+            content_end = min(stop_positions)
+
+    section_body = normalized[content_start:content_end].strip()
+    if not section_body:
+        raise ValueError(f"Section ## {title} must contain non-empty content.")
+
+    return normalized
+
+
 def validate_init_reply(mode: str, reply: str) -> str:
-    try:
-        obj = json.loads(reply)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Init reply must be valid JSON: {exc.msg}") from exc
-
-    if not isinstance(obj, dict):
-        raise ValueError("Init reply must be a JSON object.")
-
-    expected_field = INIT_TASK_REPLY_FIELD if mode == "task" else INIT_RECOVERY_REPLY_FIELD
-    if set(obj.keys()) != {expected_field}:
-        raise ValueError(f"Init reply must contain exactly one top-level field: {expected_field}.")
-
-    value = obj.get(expected_field)
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"Init reply field {expected_field} must be a non-empty string.")
-
-    return json.dumps({expected_field: value}, ensure_ascii=False, indent=2)
+    expected_title = INIT_TASK_REPLY_TITLE if mode == "task" else INIT_RECOVERY_REPLY_TITLE
+    return require_markdown_section(reply, expected_title)
 
 
 def validate_review_my_plan_reply(reply: str) -> str:
-    try:
-        obj = json.loads(reply)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"review-my-plan reply must be valid JSON: {exc.msg}") from exc
-
-    if not isinstance(obj, dict):
-        raise ValueError("review-my-plan reply must be a JSON object.")
-
-    if set(obj.keys()) != {REVIEW_PLAN_APPROVED_FIELD, REVIEW_PLAN_REPLY_FIELD}:
-        raise ValueError(
-            "review-my-plan reply must contain exactly these top-level fields: "
-            "approved_to_mutate, plan_review_reply."
-        )
-
-    approved = obj.get(REVIEW_PLAN_APPROVED_FIELD)
-    reply_text = obj.get(REVIEW_PLAN_REPLY_FIELD)
-
-    if not isinstance(approved, bool):
-        raise ValueError("review-my-plan field approved_to_mutate must be a boolean.")
-    if not isinstance(reply_text, str) or not reply_text.strip():
-        raise ValueError("review-my-plan field plan_review_reply must be a non-empty string.")
-
-    return json.dumps(
-        {
-            REVIEW_PLAN_APPROVED_FIELD: approved,
-            REVIEW_PLAN_REPLY_FIELD: reply_text,
-        },
-        ensure_ascii=False,
-        indent=2,
-    )
+    parse_required_boolean_line(reply, REVIEW_PLAN_APPROVED_FIELD)
+    return require_markdown_section(reply, REVIEW_PLAN_REPLY_TITLE)
 
 
 def validate_review_my_work_reply(reply: str) -> str:
-    try:
-        obj = json.loads(reply)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"review-my-work reply must be valid JSON: {exc.msg}") from exc
-
-    if not isinstance(obj, dict):
-        raise ValueError("review-my-work reply must be a JSON object.")
-
-    if set(obj.keys()) != {REVIEW_WORK_APPROVED_FIELD, REVIEW_WORK_REPLY_FIELD}:
-        raise ValueError(
-            "review-my-work reply must contain exactly these top-level fields: "
-            "approved_work, work_review_reply."
-        )
-
-    approved = obj.get(REVIEW_WORK_APPROVED_FIELD)
-    reply_text = obj.get(REVIEW_WORK_REPLY_FIELD)
-
-    if not isinstance(approved, bool):
-        raise ValueError("review-my-work field approved_work must be a boolean.")
-    if not isinstance(reply_text, str) or not reply_text.strip():
-        raise ValueError("review-my-work field work_review_reply must be a non-empty string.")
-
-    return json.dumps(
-        {
-            REVIEW_WORK_APPROVED_FIELD: approved,
-            REVIEW_WORK_REPLY_FIELD: reply_text,
-        },
-        ensure_ascii=False,
-        indent=2,
-    )
+    parse_required_boolean_line(reply, REVIEW_WORK_APPROVED_FIELD)
+    return require_markdown_section(reply, REVIEW_WORK_REPLY_TITLE)
 
 
 def validate_work_sync_reply(reply: str) -> str:
-    try:
-        obj = json.loads(reply)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"work-sync reply must be valid JSON: {exc.msg}") from exc
-
-    if not isinstance(obj, dict):
-        raise ValueError("work-sync reply must be a JSON object.")
-
-    allowed_keys = {WORK_SYNC_REPLY_FIELD, WORK_SYNC_PLAN_FIELD}
-    unknown_keys = set(obj.keys()) - allowed_keys
-    if unknown_keys:
-        raise ValueError(f"work-sync reply has unsupported fields: {', '.join(sorted(unknown_keys))}")
-
-    if WORK_SYNC_REPLY_FIELD not in obj:
-        raise ValueError("work-sync reply must contain discussion_reply.")
-
-    discussion_reply = obj.get(WORK_SYNC_REPLY_FIELD)
-    if not isinstance(discussion_reply, str) or not discussion_reply.strip():
-        raise ValueError("work-sync field discussion_reply must be a non-empty string.")
-
-    normalized: dict[str, str] = {WORK_SYNC_REPLY_FIELD: discussion_reply}
-
-    if WORK_SYNC_PLAN_FIELD in obj:
-        plan = obj.get(WORK_SYNC_PLAN_FIELD)
-        if not isinstance(plan, str) or not plan.strip():
-            raise ValueError("work-sync field plan must be a non-empty string when provided.")
-        normalized[WORK_SYNC_PLAN_FIELD] = plan
-
-    return json.dumps(normalized, ensure_ascii=False, indent=2)
+    normalized = require_markdown_section(reply, WORK_SYNC_REPLY_TITLE, stop_titles=[WORK_SYNC_PLAN_TITLE])
+    plan_heading = find_markdown_heading(normalized, WORK_SYNC_PLAN_TITLE)
+    if plan_heading is not None:
+        require_markdown_section(normalized, WORK_SYNC_PLAN_TITLE)
+    return normalized
 
 
 def build_prompt(tool: str, stdin_text: str) -> str:
@@ -751,6 +737,7 @@ def run_codex(
     repo_root: Path,
     session_id: Optional[str],
     prompt: str,
+    sandbox_mode: str,
     timeout_s: int,
     model: Optional[str],
     reasoning_effort: Optional[str],
@@ -761,6 +748,8 @@ def run_codex(
             "exec",
             "--skip-git-repo-check",
             "--json",
+            "--sandbox",
+            sandbox_mode,
             "--cd",
             str(repo_root),
             "--output-last-message",
@@ -967,10 +956,12 @@ def main() -> int:
             prompt, init_mode = build_init_prompt(stdin_text)
         else:
             prompt = build_prompt(args.cmd, stdin_text)
+        sandbox_mode = resolve_codex_exec_sandbox(args.cmd, stdin_text)
         result = run_codex(
             repo_root=repo_root,
             session_id=session_id,
             prompt=prompt,
+            sandbox_mode=sandbox_mode,
             timeout_s=args.timeout_s,
             model=model,
             reasoning_effort=reasoning_effort,

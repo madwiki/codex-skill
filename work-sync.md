@@ -50,28 +50,27 @@ Rules:
 
 ## Output contract
 
-Codex must return JSON with:
+Codex replies in markdown, not JSON.
 
-```json
-{
-  "discussion_reply": "..."
-}
+Required section:
+
+```md
+## Discussion Reply
+...
 ```
 
-Optional:
+Optional section:
 
-```json
-{
-  "discussion_reply": "...",
-  "plan": "..."
-}
+```md
+## Plan
+...
 ```
 
 Rules:
 
-- `discussion_reply` is required
-- `plan` is optional
-- if Codex is not ready to propose a plan, it must omit `plan`
+- `## Discussion Reply` is required
+- `## Plan` is optional
+- if Codex is not ready to propose a plan, it must omit the `## Plan` section
 
 ## Run
 

@@ -2,10 +2,11 @@
 
 Use this as the collaboration bootstrap entrypoint.
 
-Claude should call `init` in two cases:
+Claude should call `init` in three cases:
 
 - a new shared task is starting and Claude wants to brief Codex on the task background
 - Claude has just returned from compact or context clear and wants Codex to help recover the working context
+- mutation ownership is switching between Claude and Codex, and Claude wants to re-bootstrap Codex under the new path before continuing
 
 `init` is not a mutation step and not a discussion turn. It exists to give Codex the collaboration protocol plus either the new-task background or the tentative recovery background.
 
@@ -37,31 +38,34 @@ Rules:
 - one of them is required
 - `mutation_owner` is required and must be exactly `claude` or `codex`
 - `init` privately injects the Codex collaboration protocol plus the role-specific path framing for the chosen mutation owner; Claude does not need to restate that in the input payload
+- if mutation ownership is reversing mid-task, Claude must rerun `init` before using the new path
+- for a path reversal with intact task continuity, use `task_background` to restate the current task under the new path
+- for a path reversal combined with compact/context clear, use `recovery_background` plus the new `mutation_owner`
 - after `init`, Claude resumes the appropriate path:
   - `chat.md` / `review-my-plan.md` / `review-my-work.md` for Claude-mutates
   - `work-sync.md` / `request-mutation.md` for Codex-mutates
 
 ## Output contract
 
-If the input used `task_background`, Codex must return:
+Codex replies in markdown, not JSON.
 
-```json
-{
-  "task_understanding_reply": "..."
-}
+If the input used `task_background`, Codex must include this required section:
+
+```md
+## Task Understanding Reply
+...
 ```
 
-That reply should tell Claude what Codex understands about the task, what risks or disagreements stand out, whether the chosen mutation-owner path looks problematic, and what Claude should know before continuing.
+That section should tell Claude what Codex understands about the task, what risks or disagreements stand out, whether the chosen mutation-owner path looks problematic, and what Claude should know before continuing.
 
-If the input used `recovery_background`, Codex must return:
+If the input used `recovery_background`, Codex must include this required section:
 
-```json
-{
-  "context_recovery_reply": "..."
-}
+```md
+## Context Recovery Reply
+...
 ```
 
-That reply should tell Claude what Codex can recover, what remains uncertain, and where the workflow should resume on the chosen mutation-owner path, including which command seems appropriate next if Codex can tell.
+That section should tell Claude what Codex can recover, what remains uncertain, and where the workflow should resume on the chosen mutation-owner path, including which command seems appropriate next if Codex can tell.
 
 If Codex does not have trustworthy prior context to add, it should say so plainly instead of pretending recovery happened.
 

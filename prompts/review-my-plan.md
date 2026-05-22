@@ -20,9 +20,16 @@ Your job in this step:
 - when false, explain what is missing, wrong, risky, or needs user resolution
 - do not ask the user directly
 
-Return exactly one JSON object with exactly these top-level fields:
+Return markdown, not JSON.
 
-{
-  "approved_to_mutate": true,
-  "plan_review_reply": "..."
-}
+The first non-empty line must be exactly:
+
+approved_to_mutate: true
+
+or:
+
+approved_to_mutate: false
+
+Then include this required section:
+
+## Plan Review Reply

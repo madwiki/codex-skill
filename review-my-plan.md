@@ -52,20 +52,32 @@ Rules:
 
 ## Output contract
 
-Codex must return exactly one JSON object with exactly these top-level fields:
+Codex replies in markdown, not JSON.
 
-```json
-{
-  "approved_to_mutate": true,
-  "plan_review_reply": "..."
-}
+The first non-empty line must be:
+
+```md
+approved_to_mutate: true
+```
+
+or:
+
+```md
+approved_to_mutate: false
+```
+
+Then Codex must include this required section:
+
+```md
+## Plan Review Reply
+...
 ```
 
 Meaning:
 
 - `approved_to_mutate: true` means Claude may begin state-changing work
 - `approved_to_mutate: false` means Claude must not mutate yet
-- `plan_review_reply` contains Codex's reasoning, blockers, risks, disagreement, requested changes, and any minimum user decision if needed
+- `## Plan Review Reply` contains Codex's reasoning, blockers, risks, disagreement, requested changes, and any minimum user decision if needed
 
 ## Run
 
