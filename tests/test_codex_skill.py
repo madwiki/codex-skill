@@ -6,10 +6,13 @@ import tempfile
 import textwrap
 import unittest
 from pathlib import Path
+from typing import Optional, Tuple
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "bin" / "codex_skill.py"
+SESSION_FILENAME = "codex_session.json"
+INTENT_FILENAME = "codex_session_intent.json"
 
 FAKE_CODEX_SOURCE = textwrap.dedent(
     """\
@@ -21,6 +24,7 @@ FAKE_CODEX_SOURCE = textwrap.dedent(
 
     args = sys.argv[1:]
     reply = os.environ["FAKE_CODEX_REPLY"]
+    forced_error = os.environ.get("FAKE_CODEX_ERROR")
     capture_path = os.environ.get("FAKE_CODEX_CAPTURE")
     stdin_text = sys.stdin.read()
 
@@ -40,6 +44,10 @@ FAKE_CODEX_SOURCE = textwrap.dedent(
         print("missing --output-last-message", file=sys.stderr)
         sys.exit(2)
 
+    if forced_error:
+        print(forced_error, file=sys.stderr)
+        sys.exit(1)
+
     Path(out_path).write_text(reply, encoding="utf-8")
     print(json.dumps({"type": "session_meta", "payload": {"id": "test-session", "originator": "codex_exec", "source": "exec"}}))
     """
@@ -49,16 +57,49 @@ FAKE_CODEX_SOURCE = textwrap.dedent(
 class CodexSkillIntegrationTests(unittest.TestCase):
     maxDiff = None
 
-    def run_skill(self, cmd: str, payload: str, reply: str) -> tuple[subprocess.CompletedProcess[str], dict]:
+    def run_skill(
+        self,
+        cmd: str,
+        payload: str,
+        reply: str = "",
+        *,
+        session_id: Optional[str] = None,
+        authorize_new: bool = False,
+        error: Optional[str] = None,
+    ) -> Tuple[subprocess.CompletedProcess[str], Optional[dict], dict]:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
             workspace = tmp / "workspace"
-            workspace.mkdir()
-            (workspace / ".claude").mkdir()
+            claude_dir = workspace / ".claude"
+            claude_dir.mkdir(parents=True)
+
+            if session_id is not None:
+                (claude_dir / SESSION_FILENAME).write_text(
+                    json.dumps({"session_id": session_id}, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+
+            if authorize_new:
+                (claude_dir / INTENT_FILENAME).write_text(
+                    json.dumps(
+                        {
+                            "action": "dangerous-new-session",
+                            "user_permission": "User explicitly asked to start fresh.",
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
 
             fake_codex = tmp / "fake-codex.py"
             fake_codex.write_text(FAKE_CODEX_SOURCE, encoding="utf-8")
             fake_codex.chmod(0o755)
+
+            home_dir = tmp / "home"
+            trash_dir = home_dir / ".Trash"
+            trash_dir.mkdir(parents=True)
 
             capture_path = tmp / "capture.json"
             env = os.environ.copy()
@@ -66,9 +107,12 @@ class CodexSkillIntegrationTests(unittest.TestCase):
             env["CODEX_HOME"] = str(tmp / "codex-home")
             env["FAKE_CODEX_REPLY"] = reply
             env["FAKE_CODEX_CAPTURE"] = str(capture_path)
+            env["HOME"] = str(home_dir)
+            if error is not None:
+                env["FAKE_CODEX_ERROR"] = error
 
             proc = subprocess.run(
-                [sys.executable, str(SCRIPT), "--cwd", str(workspace), "--new-session", cmd],
+                [sys.executable, str(SCRIPT), "--cwd", str(workspace), cmd],
                 input=payload,
                 text=True,
                 capture_output=True,
@@ -76,86 +120,149 @@ class CodexSkillIntegrationTests(unittest.TestCase):
                 cwd=str(ROOT),
             )
 
-            capture = json.loads(capture_path.read_text(encoding="utf-8"))
-            return proc, capture
+            capture = None
+            if capture_path.exists():
+                capture = json.loads(capture_path.read_text(encoding="utf-8"))
+
+            state = {
+                "session_exists": (claude_dir / SESSION_FILENAME).exists(),
+                "intent_exists": (claude_dir / INTENT_FILENAME).exists(),
+                "trashed_session_exists": (trash_dir / SESSION_FILENAME).exists(),
+            }
+            return proc, capture, state
 
     @staticmethod
     def sandbox_from_argv(argv: list[str]) -> str:
         index = argv.index("--sandbox")
         return argv[index + 1]
 
-    def test_init_task_claude_uses_read_only_and_role_specific_prompt(self) -> None:
-        proc, capture = self.run_skill(
-            "init",
-            '{"task_background":"Current task brief","mutation_owner":"claude"}',
-            "## Task Understanding Reply\n\nLooks consistent.",
+    def test_existing_session_is_resumed_by_default(self) -> None:
+        proc, capture, _state = self.run_skill(
+            "review-my-plan",
+            '{"plan_for_review":"Change only the prompt parser and update tests."}',
+            "approved_to_mutate: true\n\n## Plan Review Reply\n\nBoundary is acceptable.",
+            session_id="resume-me",
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
+        assert capture is not None
         self.assertEqual(self.sandbox_from_argv(capture["argv"]), "read-only")
-        self.assertIn("fresh task brief on the Claude-mutates path", capture["stdin"])
-        self.assertIn("Claude owns state-changing work on this path.", capture["stdin"])
-        self.assertIn("## Task Understanding Reply", proc.stdout)
+        self.assertIn("resume", capture["argv"])
+        self.assertIn("resume-me", capture["argv"])
 
-    def test_init_task_codex_uses_read_only_and_role_specific_prompt(self) -> None:
-        proc, capture = self.run_skill(
+    def test_init_without_managed_session_requires_dangerous_new_session(self) -> None:
+        proc, _capture, _state = self.run_skill(
+            "init",
+            '{"task_background":"Current task brief","mutation_owner":"claude"}',
+        )
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("dangerous-new-session", proc.stderr)
+        self.assertIn("must not silently create", proc.stderr)
+
+    def test_dangerous_new_session_archives_existing_session_and_authorizes_next_init(self) -> None:
+        proc, capture, state = self.run_skill(
+            "dangerous-new-session",
+            '{"user_permission":"The user explicitly asked to abandon the old Codex continuity and start fresh."}',
+            session_id="old-session",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIsNone(capture)
+        self.assertFalse(state["session_exists"])
+        self.assertTrue(state["intent_exists"])
+        self.assertTrue(state["trashed_session_exists"])
+        self.assertIn("dangerous-new-session authorized", proc.stdout)
+        self.assertIn("init", proc.stdout)
+
+    def test_init_consumes_authorized_new_session(self) -> None:
+        proc, capture, state = self.run_skill(
             "init",
             '{"task_background":"Current task brief","mutation_owner":"codex"}',
             "## Task Understanding Reply\n\nSwitch to Codex-owned execution.",
+            authorize_new=True,
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
+        assert capture is not None
         self.assertEqual(self.sandbox_from_argv(capture["argv"]), "read-only")
+        self.assertNotIn("resume", capture["argv"])
+        self.assertTrue(state["session_exists"])
+        self.assertFalse(state["intent_exists"])
+
+    def test_non_init_with_pending_intent_requires_init_first(self) -> None:
+        proc, _capture, _state = self.run_skill(
+            "work-sync",
+            '{"sync_message":"Please respond to the current review feedback."}',
+            authorize_new=True,
+        )
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("Run `init` next", proc.stderr)
+
+    def test_init_task_codex_uses_role_specific_prompt_when_authorized(self) -> None:
+        proc, capture, _state = self.run_skill(
+            "init",
+            '{"task_background":"Current task brief","mutation_owner":"codex"}',
+            "## Task Understanding Reply\n\nSwitch to Codex-owned execution.",
+            authorize_new=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        assert capture is not None
         self.assertIn("fresh task brief on the Codex-mutates path", capture["stdin"])
         self.assertIn("Codex owns state-changing work on this path", capture["stdin"])
-        self.assertIn("## Task Understanding Reply", proc.stdout)
 
     def test_work_sync_uses_read_only_and_accepts_markdown_sections(self) -> None:
-        proc, capture = self.run_skill(
+        proc, capture, _state = self.run_skill(
             "work-sync",
             '{"sync_message":"Please respond to the current review feedback."}',
             "## Discussion Reply\n\nI agree with the concern.\n\n## Plan\n\nRepair the parser first.",
+            session_id="existing-session",
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
+        assert capture is not None
         self.assertEqual(self.sandbox_from_argv(capture["argv"]), "read-only")
         self.assertIn("Sync message from Claude:", capture["stdin"])
         self.assertIn("## Plan", proc.stdout)
 
     def test_request_mutation_defaults_to_workspace_write(self) -> None:
-        proc, capture = self.run_skill(
+        proc, capture, _state = self.run_skill(
             "request-mutation",
             '{"approved_mutation":"Implement the approved parser fix and stop."}',
             "Updated parser, ran validation, stopped for review.",
+            session_id="existing-session",
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
+        assert capture is not None
         self.assertEqual(self.sandbox_from_argv(capture["argv"]), "workspace-write")
         self.assertIn("workspace-write (default mutation sandbox)", capture["stdin"])
         self.assertIn("Approved mutation from Claude:", capture["stdin"])
 
     def test_request_mutation_full_access_escalates_to_danger_full_access(self) -> None:
-        proc, capture = self.run_skill(
+        proc, capture, _state = self.run_skill(
             "request-mutation",
             '{"approved_mutation":"Run the approved repair step.","sandbox_mode":"full-access"}',
             "Ran the approved repair under full access and stopped.",
+            session_id="existing-session",
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
+        assert capture is not None
         self.assertEqual(self.sandbox_from_argv(capture["argv"]), "danger-full-access")
         self.assertIn("danger-full-access (explicit full-access escalation approved by Claude)", capture["stdin"])
 
-    def test_review_my_plan_accepts_markdown_gate(self) -> None:
-        proc, capture = self.run_skill(
-            "review-my-plan",
-            '{"plan_for_review":"Change only the prompt parser and update tests."}',
-            "approved_to_mutate: true\n\n## Plan Review Reply\n\nBoundary is acceptable.",
+    def test_missing_thread_error_requires_explicit_dangerous_reset(self) -> None:
+        proc, _capture, _state = self.run_skill(
+            "review-my-work",
+            '{"work_for_review":"Please review the completed work."}',
+            session_id="stale-session",
+            error="thread stale-session not found",
         )
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(self.sandbox_from_argv(capture["argv"]), "read-only")
-        self.assertIn("Plan for review from Claude:", capture["stdin"])
-        self.assertIn("approved_to_mutate: true", proc.stdout)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("could not resume", proc.stderr)
+        self.assertIn("dangerous-new-session", proc.stderr)
+        self.assertIn("Do not manually delete or replace the session file", proc.stderr)
 
     def test_review_my_plan_rejects_legacy_json_reply(self) -> None:
-        proc, _capture = self.run_skill(
+        proc, _capture, _state = self.run_skill(
             "review-my-plan",
             '{"plan_for_review":"Change only the prompt parser and update tests."}',
             '{"approved_to_mutate":true,"plan_review_reply":"legacy json"}',
+            session_id="existing-session",
         )
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("approved_to_mutate must be the first non-empty line", proc.stderr)

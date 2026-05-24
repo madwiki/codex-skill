@@ -13,6 +13,8 @@ This skill is for Claude Code. Claude invokes Codex as a peer collaborator. Code
 
 Codex is invoked by Claude; Codex does not speak to the user directly. Claude remains responsible for user-facing conversation and for asking the user to decide unresolved issues. This does not make Claude's judgment higher than Codex's judgment.
 
+Session continuity is wrapper-managed. Claude must use the `bin/codex-skill-*` commands instead of calling raw `codex` directly. Claude must not manually edit, delete, or replace `<repo>/.claude/codex_session.json`. If the user explicitly wants to abandon continuity and start fresh, Claude must use `dangerous-new-session.md`.
+
 ## Persistence bootstrap
 
 This is the first required action every time this skill is loaded, before choosing `chat`, planning, mutating, reviewing, or declaring completion.
@@ -40,6 +42,8 @@ Use `init.md` to bootstrap Codex collaboration in exactly three cases:
 `mutation_owner` must be exactly `claude` or `codex`.
 
 `init` privately injects the Codex collaboration protocol and the role-specific framing for the chosen mutation-owner path. Claude does not need to restate the peer relationship, review discipline, disagreement protocol, or path-specific Codex role in the init payload.
+
+`init` resumes the existing managed Codex session by default. If no managed session exists yet, `init` must not silently create one. Fresh session creation changes continuity and is treated as destructive. Only after the user explicitly asks for a fresh start, replacement, or continuity reset may Claude use `dangerous-new-session.md`, and then rerun `init`.
 
 After `init`, Claude resumes the appropriate workflow based on Codex's reply. That may be `chat.md`, `review-my-plan.md`, `review-my-work.md`, `work-sync.md`, or `request-mutation.md`, depending on the chosen mutation-owner path and task state.
 
@@ -83,6 +87,7 @@ Use only one mutation owner for a task segment to avoid conflicting edits and pr
 
 | Situation | Guide |
 | --- | --- |
+| The user explicitly wants to abandon continuity and authorize a fresh managed Codex session | `dangerous-new-session.md` |
 | Bootstrap a new shared task or recover after compact/context clear | `init.md` |
 | Normal sync, requirement changes, uncertainty, stuck states, disagreements, or consensus-building on the Claude-mutates path | `chat.md` |
 | Claude will own state-changing work and wants Codex to review the plan before Claude mutates | `review-my-plan.md` |

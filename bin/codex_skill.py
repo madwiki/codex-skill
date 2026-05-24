@@ -46,6 +46,7 @@ REQUEST_MUTATION_FRESH_USER_FIELD = "fresh_user_message"
 REQUEST_MUTATION_SANDBOX_MODE_FIELD = "sandbox_mode"
 REQUEST_MUTATION_SANDBOX_DEFAULT = "default"
 REQUEST_MUTATION_SANDBOX_FULL_ACCESS = "full-access"
+DANGEROUS_NEW_SESSION_PERMISSION_FIELD = "user_permission"
 INIT_TASK_REPLY_TITLE = "Task Understanding Reply"
 INIT_RECOVERY_REPLY_TITLE = "Context Recovery Reply"
 REVIEW_PLAN_REPLY_TITLE = "Plan Review Reply"
@@ -63,6 +64,7 @@ TOOL_HELP = {
     "review-my-work": "Claude-mutates mode: Codex reviews Claude's work without mutating state (reads JSON from stdin).",
     "work-sync": "Codex-mutates sync turn for discussion, plan output, and review response (reads JSON from stdin).",
     "request-mutation": "Codex-mutates mode: Codex performs one approved mutation step (reads JSON from stdin).",
+    "dangerous-new-session": "Explicitly authorize discarding continuity and starting a fresh managed Codex session (reads JSON from stdin).",
 }
 
 
@@ -91,18 +93,23 @@ def iter_ancestors(start: Path) -> Iterator[Path]:
 
 def find_session_root(start: Path) -> Optional[Path]:
     """
-    Find the nearest ancestor directory that already owns a Codex session file.
+    Find the nearest ancestor directory that already owns a managed Codex session
+    file or a one-time fresh-session authorization.
 
     IMPORTANT:
     - Never treat the global Claude Code config directory (~/.claude) as a project root.
-    - Only `.claude/codex_session.json` is a stable anchor. `.claude/` can exist at many levels
-      for other purposes (local guidelines), so we do not auto-pick based on `.claude/` alone.
+    - `.claude/codex_session.json` and `.claude/codex_session_intent.json` are stable anchors.
+      `.claude/` alone can exist at many levels for other purposes (local guidelines),
+      so we do not auto-pick based on `.claude/` alone.
     """
     for p in iter_ancestors(start):
         claude_dir = p / ".claude"
         if is_global_claude_dir(claude_dir):
             continue
-        if (claude_dir / "codex_session.json").is_file():
+        if (
+            (claude_dir / "codex_session.json").is_file()
+            or (claude_dir / "codex_session_intent.json").is_file()
+        ):
             return p
     return None
 
@@ -122,6 +129,10 @@ def candidate_roots_with_claude_dir(start: Path, limit: int = 5) -> list[Path]:
 
 def session_file_path(repo_root: Path) -> Path:
     return repo_root / ".claude" / "codex_session.json"
+
+
+def session_intent_file_path(repo_root: Path) -> Path:
+    return repo_root / ".claude" / "codex_session_intent.json"
 
 
 def read_session_id(repo_root: Path) -> Optional[str]:
@@ -150,6 +161,38 @@ def write_session_id(repo_root: Path, session_id: str) -> None:
     tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     tmp.replace(path)
+
+
+def read_session_intent(repo_root: Path) -> Optional[dict]:
+    path = session_intent_file_path(repo_root)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def write_session_intent(repo_root: Path, permission_text: str) -> None:
+    path = session_intent_file_path(repo_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "action": "dangerous-new-session",
+        "user_permission": permission_text,
+        "updated_at": datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z"),
+    }
+    tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(path)
+
+
+def clear_session_intent(repo_root: Path) -> None:
+    try:
+        session_intent_file_path(repo_root).unlink(missing_ok=True)  # type: ignore[call-arg]
+    except Exception:
+        return
 
 
 @dataclass(frozen=True)
@@ -190,6 +233,11 @@ class RequestMutationPayload:
     approved_mutation: str
     fresh_user_message: Optional[str]
     sandbox_mode: str
+
+
+@dataclass(frozen=True)
+class DangerousNewSessionPayload:
+    user_permission: str
 
 
 def parse_init_payload(stdin_text: str) -> InitPayload:
@@ -433,6 +481,38 @@ def parse_request_mutation_payload(stdin_text: str) -> RequestMutationPayload:
         fresh_user_message=fresh_user_message,
         sandbox_mode=sandbox_mode,
     )
+
+
+def parse_dangerous_new_session_payload(stdin_text: str) -> DangerousNewSessionPayload:
+    text = stdin_text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not text:
+        raise ValueError(
+            "dangerous-new-session input is empty. Provide JSON with a non-empty user_permission string."
+        )
+
+    try:
+        obj = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"dangerous-new-session input must be valid JSON: {exc.msg}") from exc
+
+    if not isinstance(obj, dict):
+        raise ValueError("dangerous-new-session input must be a JSON object.")
+
+    allowed_keys = {DANGEROUS_NEW_SESSION_PERMISSION_FIELD}
+    unknown_keys = set(obj.keys()) - allowed_keys
+    if unknown_keys:
+        raise ValueError(
+            "dangerous-new-session input has unsupported fields: "
+            + ", ".join(sorted(unknown_keys))
+        )
+
+    user_permission = obj.get(DANGEROUS_NEW_SESSION_PERMISSION_FIELD)
+    if not isinstance(user_permission, str) or not user_permission.strip():
+        raise ValueError(
+            "dangerous-new-session requires a non-empty string field: user_permission."
+        )
+
+    return DangerousNewSessionPayload(user_permission=user_permission.strip())
 
 
 def load_prompt_asset(name: str) -> str:
@@ -733,6 +813,84 @@ class CodexRunResult:
     reply: str
 
 
+def ensure_unique_trash_destination(filename: str) -> Path:
+    trash_dir = Path.home() / ".Trash"
+    trash_dir.mkdir(parents=True, exist_ok=True)
+
+    candidate = trash_dir / filename
+    if not candidate.exists():
+        return candidate
+
+    stem = candidate.stem
+    suffix = candidate.suffix
+    counter = 2
+    while True:
+        numbered = trash_dir / f"{stem}-{counter}{suffix}"
+        if not numbered.exists():
+            return numbered
+        counter += 1
+
+
+def archive_existing_session_file(repo_root: Path) -> Optional[Path]:
+    src = session_file_path(repo_root)
+    if not src.exists():
+        return None
+    dest = ensure_unique_trash_destination(src.name)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    src.replace(dest)
+    return dest
+
+
+def explain_missing_session(
+    repo_root: Path,
+    cmd: str,
+    has_pending_intent: bool,
+) -> str:
+    session_path = session_file_path(repo_root)
+    dangerous_cmd = "<skill_root>/bin/codex-skill-dangerous-new-session"
+    lines = [
+        "No managed Codex session is available for this workspace.",
+        f"Expected session file: {session_path}",
+        "",
+        "Session continuity is wrapper-managed. Do not call raw `codex` directly and do not manually edit or delete the managed session file.",
+    ]
+    if has_pending_intent:
+        lines.extend(
+            [
+                "",
+                "A dangerous new session has already been authorized for this workspace.",
+                "Run `init` next to bootstrap the fresh managed Codex session before using any other codex-skill command.",
+            ]
+        )
+        return "\n".join(lines)
+
+    if cmd == "init":
+        lines.extend(
+            [
+                "",
+                "init must not silently create a fresh managed Codex session.",
+                "Starting a fresh managed Codex session changes continuity and is treated as destructive.",
+                "Only do that after the user explicitly asks for a fresh start, replacement, or continuity reset.",
+                f"Then run {dangerous_cmd} first, and rerun init after it succeeds.",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "",
+                "This command can only continue an existing managed Codex session.",
+                "If the user explicitly wants to discard continuity and start fresh, run "
+                f"{dangerous_cmd} first, then run init, then continue with the normal workflow.",
+            ]
+        )
+    return "\n".join(lines)
+
+
+def looks_like_missing_thread_error(message: str) -> bool:
+    lowered = message.lower()
+    return "thread" in lowered and "not found" in lowered
+
+
 def run_codex(
     repo_root: Path,
     session_id: Optional[str],
@@ -900,7 +1058,6 @@ def main() -> int:
         default=None,
         help="Working directory used to locate the project session root.",
     )
-    parser.add_argument("--new-session", action="store_true", help="Force creating a new Codex session.")
     parser.add_argument("--timeout-s", type=int, default=3600, help="codex exec timeout in seconds.")
     parser.add_argument("--model", default=None, help="Optional model override for this call.")
     parser.add_argument("--reasoning-effort", default=None, help="Optional reasoning effort override for this call.")
@@ -919,14 +1076,21 @@ def main() -> int:
         if cwd_explicit:
             chosen = start_cwd.expanduser().resolve()
             chosen_claude_dir = chosen / ".claude"
-            if chosen_claude_dir.is_dir() and not is_global_claude_dir(chosen_claude_dir):
+            if (
+                args.cmd == "dangerous-new-session"
+                and not is_global_claude_dir(chosen_claude_dir)
+            ):
+                repo_root = chosen
+            elif chosen_claude_dir.is_dir() and not is_global_claude_dir(chosen_claude_dir):
                 repo_root = chosen
 
     if repo_root is None:
         candidates = candidate_roots_with_claude_dir(start_cwd)
         lines = [
             "No project Codex session root is configured.",
-            "Could not find an existing session file: <dir>/.claude/codex_session.json",
+            "Could not find an existing managed session anchor:",
+            "  - <dir>/.claude/codex_session.json",
+            "  - <dir>/.claude/codex_session_intent.json",
             f"(excluding the global Claude Code directory: {CLAUDE_GLOBAL_DIR}).",
             "",
             "Ask the user to choose a directory to store the Codex session for this workspace.",
@@ -938,14 +1102,52 @@ def main() -> int:
             lines.append("Then rerun this command with: --cwd <chosen_dir>")
         else:
             lines.append("No .claude/ directory was found in parent directories (excluding the global one).")
-            lines.append("Ask the user to choose a directory, create <chosen_dir>/.claude/, then rerun with: --cwd <chosen_dir>")
+            lines.append(
+                "Ask the user to choose a directory. For a fresh managed session, "
+                "use codex-skill-dangerous-new-session with: --cwd <chosen_dir>; it will create <chosen_dir>/.claude/ if needed."
+            )
         raise RuntimeError("\n".join(lines))
 
-    session_id = None if args.new_session else read_session_id(repo_root)
     stdin_text = sys.stdin.read()
     if not stdin_text.strip():
         eprint("Empty input. Provide content via stdin.")
         return 2
+
+    if args.cmd == "dangerous-new-session":
+        try:
+            payload = parse_dangerous_new_session_payload(stdin_text)
+            repo_root.mkdir(parents=True, exist_ok=True)
+            (repo_root / ".claude").mkdir(parents=True, exist_ok=True)
+            archived = archive_existing_session_file(repo_root)
+            write_session_intent(repo_root, payload.user_permission)
+        except Exception as exc:
+            eprint(str(exc))
+            return 1
+
+        lines = [
+            "dangerous-new-session authorized.",
+            "The next step must be init. That init call will be allowed to create a fresh managed Codex session for this workspace.",
+            "Do not call raw `codex` directly and do not edit the managed session file manually.",
+        ]
+        if archived is not None:
+            lines.insert(1, f"Archived prior managed session file to: {archived}")
+        else:
+            lines.insert(1, "No prior managed session file was present to archive.")
+        sys.stdout.write("\n".join(lines) + "\n")
+        return 0
+
+    session_id = read_session_id(repo_root)
+    session_intent = read_session_intent(repo_root)
+    has_pending_intent = session_intent is not None
+    allow_fresh_session = args.cmd == "init" and session_id is None and has_pending_intent
+
+    if session_id is None and not allow_fresh_session:
+        eprint(explain_missing_session(repo_root, args.cmd, has_pending_intent))
+        return 1
+
+    if session_id is None and has_pending_intent and args.cmd != "init":
+        eprint(explain_missing_session(repo_root, args.cmd, has_pending_intent))
+        return 1
 
     model = args.model or DEFAULT_MODEL
     reasoning_effort = args.reasoning_effort or DEFAULT_REASONING_EFFORT
@@ -967,10 +1169,26 @@ def main() -> int:
             reasoning_effort=reasoning_effort,
         )
     except Exception as exc:
-        eprint(str(exc))
+        if session_id and looks_like_missing_thread_error(str(exc)):
+            eprint(
+                "\n".join(
+                    [
+                        str(exc),
+                        "",
+                        "The managed Codex session id exists locally, but Codex could not resume it.",
+                        "Do not manually delete or replace the session file and do not call raw `codex` directly.",
+                        "If the user explicitly wants to abandon this continuity and start fresh, run "
+                        "<skill_root>/bin/codex-skill-dangerous-new-session, then rerun init.",
+                    ]
+                )
+            )
+        else:
+            eprint(str(exc))
         return 1
 
     write_session_id(repo_root, result.session_id)
+    if allow_fresh_session:
+        clear_session_intent(repo_root)
     try_promote_exec_session_to_cli(result.session_id)
 
     if init_mode is not None:

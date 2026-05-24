@@ -2,6 +2,8 @@
 
 Use this as the collaboration bootstrap entrypoint.
 
+Session continuity is wrapper-managed. Claude must use the wrapper commands and must not call raw `codex` directly or manually edit/delete `<repo>/.claude/codex_session.json`.
+
 Claude should call `init` in three cases:
 
 - a new shared task is starting and Claude wants to brief Codex on the task background
@@ -9,6 +11,8 @@ Claude should call `init` in three cases:
 - mutation ownership is switching between Claude and Codex, and Claude wants to re-bootstrap Codex under the new path before continuing
 
 `init` is not a mutation step and not a discussion turn. It exists to give Codex the collaboration protocol plus either the new-task background or the tentative recovery background.
+
+`init` always prefers the existing managed Codex session. If there is no managed session yet, `init` must not silently create a fresh one. A fresh managed session changes continuity and therefore requires explicit user permission first via `dangerous-new-session.md`.
 
 ## Input contract
 
@@ -41,6 +45,7 @@ Rules:
 - if mutation ownership is reversing mid-task, Claude must rerun `init` before using the new path
 - for a path reversal with intact task continuity, use `task_background` to restate the current task under the new path
 - for a path reversal combined with compact/context clear, use `recovery_background` plus the new `mutation_owner`
+- if there is no managed Codex session yet, run `dangerous-new-session.md` first only after explicit user permission, then rerun `init`
 - after `init`, Claude resumes the appropriate path:
   - `chat.md` / `review-my-plan.md` / `review-my-work.md` for Claude-mutates
   - `work-sync.md` / `request-mutation.md` for Codex-mutates

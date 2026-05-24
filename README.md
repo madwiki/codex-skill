@@ -1,6 +1,6 @@
 # codex-skill
 
-A Claude Skill that lets Claude Code collaborate with a local Codex session, resuming prior context when available and falling back cleanly when it is not.
+A Claude Skill that lets Claude Code collaborate with a local Codex session, automatically resuming the managed session when it exists and refusing to create a fresh one unless the user explicitly authorizes a dangerous continuity reset.
 
 ## Install
 
@@ -13,7 +13,9 @@ git clone https://github.com/madwiki/codex-skill ~/.claude/skills/codex-skill
 
 ## What it does
 
-- Persists and reuses the Codex session id via `<repo>/.claude/codex_session.json` when recovery is available
+- Persists and reuses the managed Codex session id via `<repo>/.claude/codex_session.json`
+- Treats session continuity as wrapper-managed: use only `bin/codex-skill-*` commands, never raw `codex`, and never manually edit or delete the managed session file
+- Refuses to create a fresh managed Codex session unless Claude first runs `dangerous-new-session` after explicit user permission
 - Requires a persistence bootstrap on skill load: verify durable memory/`CLAUDE.md` contains the reload + init + subtask-guide rule, and add it if missing
 - Uses `init` as the bootstrap entrypoint for a new shared task, after Claude returns from compact or context clear, or when mutation ownership reverses between Claude and Codex
 - Requires `init` to declare the current mutation-owner path explicitly through `mutation_owner: "claude"` or `mutation_owner: "codex"`
@@ -34,6 +36,7 @@ git clone https://github.com/madwiki/codex-skill ~/.claude/skills/codex-skill
 
 Bootstrap:
 
+- `bin/codex-skill-dangerous-new-session`
 - `bin/codex-skill-init`
 
 Claude-mutates discussion:
@@ -53,6 +56,7 @@ Codex-mutates:
 ## Docs
 
 - `SKILL.md`
+- `dangerous-new-session.md`
 - `init.md`
 - `chat.md`
 - `work-sync.md`
