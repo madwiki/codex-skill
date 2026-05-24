@@ -12,27 +12,27 @@ Call `dangerous-new-session` with JSON on stdin:
 
 ```json
 {
-  "user_permission": "Quote or summarize the user's explicit instruction to abandon the current Codex continuity and start fresh."
+  "user_permission": "Quote or summarize the user's explicit instruction to abandon the current Codex continuity and start fresh.",
+  "target_session_id": "Optional. If provided, switch the managed session to this specific existing session id instead of creating a fresh one."
 }
 ```
 
 Rules:
 
 - `user_permission` is required and must be a non-empty string
+- `target_session_id` is optional; when provided, it must be a non-empty string
 - use this only after explicit user permission
-- this command does not talk to Codex
-- if a managed session file exists, this command archives it to `~/.Trash`
-- this command writes a one-time authorization that allows the next `init` call to create a fresh managed Codex session
-- after this command succeeds, Claude must run `init` next
-- do not use any other codex-skill command before that `init`
+- if `target_session_id` is omitted, this command creates a fresh persistent managed Codex session immediately
+- if `target_session_id` is provided, this command switches the current managed session to that specific session id
+- this command records the previous and previous-previous session ids in `<repo>/.claude/codex_session_history.json`
+- this command does not require `init`; `init` remains a separate collaboration bootstrap command
 
 ## Output contract
 
 The wrapper replies in plain text. It should tell Claude:
 
-- whether a prior managed session file was archived
-- that a dangerous new session has been authorized
-- that `init` must be the next command
+- the new current session id
+- which previous session ids were recorded for recovery
 
 ## Run
 

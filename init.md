@@ -12,7 +12,7 @@ Claude should call `init` in three cases:
 
 `init` is not a mutation step and not a discussion turn. It exists to give Codex the collaboration protocol plus either the new-task background or the tentative recovery background.
 
-`init` always prefers the existing managed Codex session. If there is no managed session yet, `init` must not silently create a fresh one. A fresh managed session changes continuity and therefore requires explicit user permission first via `dangerous-new-session.md`.
+`init` is only the collaboration bootstrap. Session creation or resume happens automatically inside the wrapper before `init` runs.
 
 ## Input contract
 
@@ -45,7 +45,6 @@ Rules:
 - if mutation ownership is reversing mid-task, Claude must rerun `init` before using the new path
 - for a path reversal with intact task continuity, use `task_background` to restate the current task under the new path
 - for a path reversal combined with compact/context clear, use `recovery_background` plus the new `mutation_owner`
-- if there is no managed Codex session yet, run `dangerous-new-session.md` first only after explicit user permission, then rerun `init`
 - after `init`, Claude resumes the appropriate path:
   - `chat.md` / `review-my-plan.md` / `review-my-work.md` for Claude-mutates
   - `work-sync.md` / `request-mutation.md` for Codex-mutates

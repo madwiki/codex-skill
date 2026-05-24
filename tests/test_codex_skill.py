@@ -12,7 +12,7 @@ from typing import Optional, Tuple
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "bin" / "codex_skill.py"
 SESSION_FILENAME = "codex_session.json"
-INTENT_FILENAME = "codex_session_intent.json"
+HISTORY_FILENAME = "codex_session_history.json"
 
 FAKE_CODEX_SOURCE = textwrap.dedent(
     """\
@@ -64,7 +64,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         reply: str = "",
         *,
         session_id: Optional[str] = None,
-        authorize_new: bool = False,
+        history_ids: Optional[list[str]] = None,
         error: Optional[str] = None,
     ) -> Tuple[subprocess.CompletedProcess[str], Optional[dict], dict]:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -79,12 +79,11 @@ class CodexSkillIntegrationTests(unittest.TestCase):
                     encoding="utf-8",
                 )
 
-            if authorize_new:
-                (claude_dir / INTENT_FILENAME).write_text(
+            if history_ids is not None:
+                (claude_dir / HISTORY_FILENAME).write_text(
                     json.dumps(
                         {
-                            "action": "dangerous-new-session",
-                            "user_permission": "User explicitly asked to start fresh.",
+                            "previous_session_ids": history_ids,
                         },
                         ensure_ascii=False,
                         indent=2,
@@ -126,8 +125,17 @@ class CodexSkillIntegrationTests(unittest.TestCase):
 
             state = {
                 "session_exists": (claude_dir / SESSION_FILENAME).exists(),
-                "intent_exists": (claude_dir / INTENT_FILENAME).exists(),
-                "trashed_session_exists": (trash_dir / SESSION_FILENAME).exists(),
+                "session_payload": (
+                    json.loads((claude_dir / SESSION_FILENAME).read_text(encoding="utf-8"))
+                    if (claude_dir / SESSION_FILENAME).exists()
+                    else None
+                ),
+                "history_exists": (claude_dir / HISTORY_FILENAME).exists(),
+                "history_payload": (
+                    json.loads((claude_dir / HISTORY_FILENAME).read_text(encoding="utf-8"))
+                    if (claude_dir / HISTORY_FILENAME).exists()
+                    else None
+                ),
             }
             return proc, capture, state
 
@@ -149,58 +157,76 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         self.assertIn("resume", capture["argv"])
         self.assertIn("resume-me", capture["argv"])
 
-    def test_init_without_managed_session_requires_dangerous_new_session(self) -> None:
-        proc, _capture, _state = self.run_skill(
+    def test_init_without_managed_session_creates_new_persistent_session(self) -> None:
+        proc, capture, state = self.run_skill(
             "init",
             '{"task_background":"Current task brief","mutation_owner":"claude"}',
+            "## Task Understanding Reply\n\nLooks consistent.",
         )
-        self.assertNotEqual(proc.returncode, 0)
-        self.assertIn("dangerous-new-session", proc.stderr)
-        self.assertIn("must not silently create", proc.stderr)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        assert capture is not None
+        self.assertNotIn("resume", capture["argv"])
+        self.assertTrue(state["session_exists"])
+        self.assertEqual(state["session_payload"]["session_id"], "test-session")
 
-    def test_dangerous_new_session_archives_existing_session_and_authorizes_next_init(self) -> None:
+    def test_dangerous_new_session_replaces_current_session_and_records_history(self) -> None:
         proc, capture, state = self.run_skill(
             "dangerous-new-session",
             '{"user_permission":"The user explicitly asked to abandon the old Codex continuity and start fresh."}',
+            "fresh managed session ready.",
             session_id="old-session",
-        )
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIsNone(capture)
-        self.assertFalse(state["session_exists"])
-        self.assertTrue(state["intent_exists"])
-        self.assertTrue(state["trashed_session_exists"])
-        self.assertIn("dangerous-new-session authorized", proc.stdout)
-        self.assertIn("init", proc.stdout)
-
-    def test_init_consumes_authorized_new_session(self) -> None:
-        proc, capture, state = self.run_skill(
-            "init",
-            '{"task_background":"Current task brief","mutation_owner":"codex"}',
-            "## Task Understanding Reply\n\nSwitch to Codex-owned execution.",
-            authorize_new=True,
+            history_ids=["older-session", "oldest-session"],
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         assert capture is not None
         self.assertEqual(self.sandbox_from_argv(capture["argv"]), "read-only")
         self.assertNotIn("resume", capture["argv"])
         self.assertTrue(state["session_exists"])
-        self.assertFalse(state["intent_exists"])
-
-    def test_non_init_with_pending_intent_requires_init_first(self) -> None:
-        proc, _capture, _state = self.run_skill(
-            "work-sync",
-            '{"sync_message":"Please respond to the current review feedback."}',
-            authorize_new=True,
+        self.assertEqual(state["session_payload"]["session_id"], "test-session")
+        self.assertTrue(state["history_exists"])
+        self.assertEqual(
+            state["history_payload"]["previous_session_ids"],
+            ["old-session", "older-session"],
         )
-        self.assertNotEqual(proc.returncode, 0)
-        self.assertIn("Run `init` next", proc.stderr)
+        self.assertIn("dangerous-new-session authorized", proc.stdout)
+        self.assertIn("test-session", proc.stdout)
 
-    def test_init_task_codex_uses_role_specific_prompt_when_authorized(self) -> None:
+    def test_dangerous_new_session_can_switch_to_target_session_id(self) -> None:
+        proc, capture, state = self.run_skill(
+            "dangerous-new-session",
+            '{"user_permission":"The user explicitly asked to switch back to a specific prior Codex session.","target_session_id":"restored-session"}',
+            session_id="current-session",
+            history_ids=["older-session", "oldest-session"],
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIsNone(capture)
+        self.assertTrue(state["session_exists"])
+        self.assertEqual(state["session_payload"]["session_id"], "restored-session")
+        self.assertTrue(state["history_exists"])
+        self.assertEqual(
+            state["history_payload"]["previous_session_ids"],
+            ["current-session", "older-session"],
+        )
+        self.assertIn("target session id: restored-session", proc.stdout)
+
+    def test_dangerous_new_session_without_prior_session_still_writes_current_session(self) -> None:
+        proc, capture, state = self.run_skill(
+            "dangerous-new-session",
+            '{"user_permission":"The user explicitly wants a fresh session."}',
+            "fresh managed session ready.",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        assert capture is not None
+        self.assertEqual(self.sandbox_from_argv(capture["argv"]), "read-only")
+        self.assertNotIn("resume", capture["argv"])
+        self.assertTrue(state["session_exists"])
+        self.assertFalse(state["history_exists"])
+
+    def test_init_task_codex_uses_role_specific_prompt_when_new_session_is_created(self) -> None:
         proc, capture, _state = self.run_skill(
             "init",
             '{"task_background":"Current task brief","mutation_owner":"codex"}',
             "## Task Understanding Reply\n\nSwitch to Codex-owned execution.",
-            authorize_new=True,
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         assert capture is not None
