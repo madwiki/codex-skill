@@ -219,7 +219,8 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         assert capture is not None
         self.assertIn("resume", capture["argv"])
         self.assertIn("legacy-session", capture["argv"])
-        self.assertIn("Legacy single-session config was migrated", proc.stderr)
+        self.assertIn("Migration notice:", proc.stdout)
+        self.assertIn("Legacy single-session config was migrated", proc.stdout)
         agent = self.find_agent(state, "default")
         self.assertEqual(agent["session_id"], "legacy-session")
         self.assertEqual(agent["previous_session_ids"], ["older-session", "oldest-session"])

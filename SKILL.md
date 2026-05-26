@@ -17,7 +17,7 @@ Session continuity is wrapper-managed. Claude must use the `bin/codex-skill-*` c
 
 The managed config is an array of agents under `<repo>/.claude/codex_agents.json`. Each agent stores its `name`, `description`, `session_id`, `model`, `reasoning_effort`, and `previous_session_ids`. All wrapper commands accept optional `--agent <name>` to target a specific managed agent; the default agent name is `default`.
 
-If the workspace still has the legacy single-session files (`codex_session.json` and optional `codex_session_history.json`), the wrapper auto-migrates them once into `codex_agents.json` and then continues from the migrated `default` agent.
+If the workspace still has the legacy single-session files (`codex_session.json` and optional `codex_session_history.json`), the wrapper auto-migrates them once into `codex_agents.json`, continues from the migrated `default` agent, and surfaces a migration notice in that command's output so Claude knows the storage model changed.
 
 ## Persistence bootstrap
 

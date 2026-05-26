@@ -1076,6 +1076,17 @@ def persist_agents_for_command(
     write_agents_config(repo_root, upsert_agent(agents, replace(agent, updated_at=iso_now())))
 
 
+def append_migration_notice(reply: str, migration_notice: Optional[str]) -> str:
+    normalized = reply.rstrip()
+    if not migration_notice:
+        return normalized + "\n"
+    return (
+        f"{normalized}\n\n---\n"
+        f"Migration notice: {migration_notice}\n"
+        "Future calls now use the array-based managed agent registry automatically.\n"
+    )
+
+
 def run_codex(
     repo_root: Path,
     session_id: Optional[str],
@@ -1360,8 +1371,6 @@ def main() -> int:
             eprint(str(exc))
             return 1
 
-        if migration_notice:
-            eprint(migration_notice)
         lines = [
             "dangerous-new-session authorized.",
             f"Target agent: {agent_name}",
@@ -1379,7 +1388,7 @@ def main() -> int:
             )
         else:
             lines.append("There was no prior managed session id for this agent to record.")
-        sys.stdout.write("\n".join(lines) + "\n")
+        sys.stdout.write(append_migration_notice("\n".join(lines), migration_notice))
         return 0
 
     effective_default_model = args.model or DEFAULT_MODEL
@@ -1468,9 +1477,7 @@ def main() -> int:
             eprint(str(exc))
             return 1
 
-    if migration_notice:
-        eprint(migration_notice)
-    sys.stdout.write(result.reply.rstrip() + "\n")
+    sys.stdout.write(append_migration_notice(result.reply, migration_notice))
     return 0
 
 

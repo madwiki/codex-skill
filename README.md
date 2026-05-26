@@ -25,6 +25,7 @@ git clone https://github.com/madwiki/codex-skill ~/.claude/skills/codex-skill
 - Treats session continuity as wrapper-managed: use only `bin/codex-skill-*` commands, never raw `codex`, and never manually edit or delete the managed agent config
 - Uses `dangerous-new-session` only when the user explicitly wants to replace the selected managed Codex agent session, either with a fresh one or with a specific target session id
 - Automatically migrates legacy single-session files (`codex_session.json` / `codex_session_history.json`) into the new array-based agent config on first use
+- When that one-time legacy migration happens, the wrapper includes a migration notice in the command output so Claude sees it immediately
 - Supports direct multi-agent usage through `--agent <name>`; the default agent name is `default`
 - Requires a persistence bootstrap on skill load: verify durable memory/`CLAUDE.md` contains the reload + init + subtask-guide rule, and add it if missing
 - Uses `init` as the bootstrap entrypoint for a new shared task, after Claude returns from compact or context clear, or when mutation ownership reverses between Claude and Codex
