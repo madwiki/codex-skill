@@ -37,6 +37,9 @@ git clone https://github.com/madwiki/codex-skill ~/.claude/skills/codex-skill
 - When that one-time legacy migration happens, the wrapper includes a migration notice in the command output so Claude sees it immediately
 - Supports direct multi-agent usage through `--agent <name>`; the default agent name is `default`
 - Supports `configure` to update Claude baseline text, shared stage guidance, workflow-stage guidance, and agent-specific focus/baseline text through the skill interface
+- `claude.*` is Claude-side guidance: it is returned to Claude in wrapper output, not injected into Codex prompts
+- `shared_stages` and `work_modes.*.stages` are common stage guidance: they are injected on both sides
+- `agents[*].*` is agent-side guidance: it is injected only into the targeted Codex agent prompt
 - Supports unified file references in injected text with the format `[[REF:<relative-path>]]` or `[[REF:<relative-path>::<locator>]]`
 - When a prompt contains `[[REF:...]]`, the wrapper injects a reference notice plus a referenced-materials list; referenced files must exist inside the workspace root
 - Prefer direct narrative text for short or medium guidance. Use `[[REF:...]]` only when the underlying material is large enough that repeating it every turn would waste context.

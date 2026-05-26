@@ -125,6 +125,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         reply: str = "",
         *,
         agent_name: str = "default",
+        initial_config: Optional[dict] = None,
         initial_agents: Optional[list[dict]] = None,
         legacy_session_id: Optional[str] = None,
         legacy_history_ids: Optional[list[str]] = None,
@@ -146,7 +147,12 @@ class CodexSkillIntegrationTests(unittest.TestCase):
                     path.parent.mkdir(parents=True, exist_ok=True)
                     path.write_text(content, encoding="utf-8")
 
-            if initial_agents is not None:
+            if initial_config is not None:
+                (claude_dir / AGENTS_FILENAME).write_text(
+                    json.dumps(initial_config, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+            elif initial_agents is not None:
                 (claude_dir / AGENTS_FILENAME).write_text(
                     json.dumps(self.build_config(initial_agents), ensure_ascii=False, indent=2) + "\n",
                     encoding="utf-8",
@@ -371,6 +377,57 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         self.assertIn("[[REF:.claude/codex-skill-refs/rules.md::Rule 5]]", capture["stdin"])
         self.assertIn("## Agent Focus", capture["stdin"])
         self.assertIn("## Agent Stage Guidance", capture["stdin"])
+
+    def test_claude_side_guidance_is_not_sent_to_codex_but_is_returned_to_claude(self) -> None:
+        initial_config = self.build_config(
+            [
+                self.build_agent(
+                    "default",
+                    session_id="existing-session",
+                    focus="Watch for architectural drift.",
+                    baseline="Keep the original requirements stable.",
+                )
+            ],
+            claude={
+                "baseline": "Claude must keep the original user constraints stable.",
+                "working_style": "Use Codex Skill, not raw Codex.",
+                "extra_context": None,
+                "stage_guidance": {
+                    "review-my-plan": "Before mutation, insist on a concrete plan."
+                },
+            },
+            shared_stages={
+                "review-my-plan": "This is a shared hard-gate stage."
+            },
+            work_modes={
+                "claude_mutates": {
+                    "stages": {
+                        "review-my-plan": "Plan approval is mode-specific here."
+                    }
+                },
+                "codex_mutates": {"stages": {}},
+            },
+        )
+        proc, capture, _state = self.run_skill(
+            "review-my-plan",
+            '{"plan_for_review":"Review the concrete plan."}',
+            "approved_to_mutate: true\n\n## Plan Review Reply\n\nLooks acceptable.",
+            initial_config=initial_config,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        assert capture is not None
+        self.assertNotIn("## Claude Baseline", capture["stdin"])
+        self.assertNotIn("## Claude Working Style", capture["stdin"])
+        self.assertNotIn("## Claude Stage Guidance", capture["stdin"])
+        self.assertIn("## Shared Stage Guidance", capture["stdin"])
+        self.assertIn("## Workflow Stage Guidance", capture["stdin"])
+        self.assertIn("## Codex Skill System Reminder For Claude", proc.stdout)
+        self.assertIn("## Claude Baseline", proc.stdout)
+        self.assertIn("## Claude Working Style", proc.stdout)
+        self.assertIn("## Claude Stage Guidance", proc.stdout)
+        self.assertIn("## Shared Stage Guidance", proc.stdout)
+        self.assertIn("## Workflow Stage Guidance", proc.stdout)
+        self.assertIn("## Codex Reply", proc.stdout)
 
     def test_missing_ref_file_fails_the_call(self) -> None:
         proc, _capture, _state = self.run_skill(

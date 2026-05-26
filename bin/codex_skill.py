@@ -1229,16 +1229,36 @@ def build_reference_notice(repo_root: Path, texts: list[str]) -> list[str]:
     return ["\n".join(lines)]
 
 
-def build_prompt_context_sections(
-    repo_root: Path,
+def build_common_stage_sections(
     config: SkillConfig,
-    agent: AgentConfig,
     *,
     tool: str,
 ) -> list[str]:
     sections: list[str] = []
     stage_name = tool
     mode_name = infer_mode_name(tool)
+
+    shared_stage_text = config.shared_stages.get(stage_name)
+    if shared_stage_text:
+        sections.append("## Shared Stage Guidance\n\n" + shared_stage_text)
+
+    if mode_name is not None:
+        mode_config = config.work_modes.get(mode_name)
+        if mode_config is not None:
+            mode_stage_text = mode_config.stages.get(stage_name)
+            if mode_stage_text:
+                sections.append("## Workflow Stage Guidance\n\n" + mode_stage_text)
+
+    return sections
+
+
+def build_claude_context_sections(
+    config: SkillConfig,
+    *,
+    tool: str,
+) -> list[str]:
+    sections: list[str] = []
+    stage_name = tool
 
     if config.claude.baseline:
         sections.append("## Claude Baseline\n\n" + config.claude.baseline)
@@ -1251,16 +1271,18 @@ def build_prompt_context_sections(
     if claude_stage_text:
         sections.append("## Claude Stage Guidance\n\n" + claude_stage_text)
 
-    shared_stage_text = config.shared_stages.get(stage_name)
-    if shared_stage_text:
-        sections.append("## Shared Stage Guidance\n\n" + shared_stage_text)
+    sections.extend(build_common_stage_sections(config, tool=tool))
+    return sections
 
-    if mode_name is not None:
-        mode_config = config.work_modes.get(mode_name)
-        if mode_config is not None:
-            mode_stage_text = mode_config.stages.get(stage_name)
-            if mode_stage_text:
-                sections.append("## Workflow Stage Guidance\n\n" + mode_stage_text)
+
+def build_agent_context_sections(
+    config: SkillConfig,
+    agent: AgentConfig,
+    *,
+    tool: str,
+) -> list[str]:
+    stage_name = tool
+    sections = build_common_stage_sections(config, tool=tool)
 
     if agent.description and agent.description != default_agent_description(agent.name):
         sections.append("## Agent Description\n\n" + agent.description)
@@ -1288,10 +1310,35 @@ def compose_prompt(
 ) -> str:
     if not base_parts:
         raise RuntimeError("compose_prompt requires at least one base part.")
-    context_sections = build_prompt_context_sections(repo_root, config, agent, tool=tool)
+    context_sections = build_agent_context_sections(config, agent, tool=tool)
     ref_notice_sections = build_reference_notice(repo_root, context_sections + base_parts[1:])
     prompt_parts = [base_parts[0], *ref_notice_sections, *context_sections, *base_parts[1:]]
     return "\n\n".join(part for part in prompt_parts if part).strip() + "\n"
+
+
+def format_output_for_claude(
+    repo_root: Path,
+    config: SkillConfig,
+    *,
+    tool: str,
+    reply: str,
+    migration_notice: Optional[str],
+) -> str:
+    normalized_reply = reply.rstrip()
+    claude_sections = build_claude_context_sections(config, tool=tool)
+    ref_notice_sections = build_reference_notice(repo_root, claude_sections)
+
+    if not claude_sections and not ref_notice_sections:
+        return append_migration_notice(normalized_reply, migration_notice)
+
+    parts = [
+        "## Codex Skill System Reminder For Claude",
+        *ref_notice_sections,
+        *claude_sections,
+        "## Codex Reply",
+        normalized_reply,
+    ]
+    return append_migration_notice("\n\n".join(part for part in parts if part), migration_notice)
 
 
 def build_init_prompt(repo_root: Path, config: SkillConfig, agent: AgentConfig, stdin_text: str) -> tuple[str, str]:
@@ -1935,7 +1982,15 @@ def main() -> int:
             lines.append(
                 "Updated agents: " + ", ".join(patch["name"] for patch in payload.agents_patch)
             )
-        sys.stdout.write(append_migration_notice("\n".join(lines), migration_notice))
+        sys.stdout.write(
+            format_output_for_claude(
+                repo_root,
+                updated_config,
+                tool="configure",
+                reply="\n".join(lines),
+                migration_notice=migration_notice,
+            )
+        )
         return 0
 
     if args.cmd == "dangerous-new-session":
@@ -2018,7 +2073,16 @@ def main() -> int:
             )
         else:
             lines.append("There was no prior managed session id for this agent to record.")
-        sys.stdout.write(append_migration_notice("\n".join(lines), migration_notice))
+        updated_config = read_skill_config(repo_root)
+        sys.stdout.write(
+            format_output_for_claude(
+                repo_root,
+                updated_config,
+                tool="dangerous-new-session",
+                reply="\n".join(lines),
+                migration_notice=migration_notice,
+            )
+        )
         return 0
 
     try:
@@ -2105,7 +2169,15 @@ def main() -> int:
             eprint(str(exc))
             return 1
 
-    sys.stdout.write(append_migration_notice(result.reply, migration_notice))
+    sys.stdout.write(
+        format_output_for_claude(
+            repo_root,
+            config,
+            tool=args.cmd,
+            reply=result.reply,
+            migration_notice=migration_notice,
+        )
+    )
     return 0
 
 

@@ -21,6 +21,12 @@ Agent patches are applied by `name`. If the named agent does not exist yet, this
 
 These text fields are user/Claude-owned guidance content. The wrapper still defines the workflow mechanics separately through the skill prompts and command contracts.
 
+Ownership boundaries:
+
+- `claude.*` is Claude-side guidance. It is returned to Claude in wrapper output and is not injected into Codex prompts.
+- `shared_stages` and `work_modes.*.stages` are common stage guidance. They may be shown on both sides.
+- `agents[*].*` is agent-side guidance. It is injected only into the currently targeted Codex agent prompt.
+
 ## Input contract
 
 Call `configure` with JSON on stdin.

@@ -24,6 +24,12 @@ The managed config is a structured object under `<repo>/.claude/codex_agents.jso
 
 Each agent may store its `name`, `description`, `focus`, `baseline`, `extra_context`, `stage_guidance`, `session_id`, `model`, `reasoning_effort`, and `previous_session_ids`. All wrapper commands accept optional `--agent <name>` to target a specific managed agent; the default agent name is `default`.
 
+Injection boundaries are strict:
+
+- `claude.*` is Claude-side guidance. It is returned to Claude in wrapper output and is not injected into Codex prompts.
+- `shared_stages` and `work_modes.*.stages` are common stage guidance. They may be shown on both sides.
+- `agents[*].*` is agent-side guidance. It is injected only into the currently targeted Codex agent prompt.
+
 If the workspace still has the legacy single-session files (`codex_session.json` and optional `codex_session_history.json`), the wrapper auto-migrates them once into `codex_agents.json`, continues from the migrated `default` agent, and surfaces a migration notice in that command's output so Claude knows the storage model changed.
 
 When baseline text references a file, use the unified format `[[REF:<relative-path>]]` or `[[REF:<relative-path>::<locator>]]`. The wrapper does not inline referenced files automatically. Instead it injects a reference-handling notice and a referenced-materials list so Codex knows that, after compaction or continuity loss, it must re-read the referenced file before relying on that content.
