@@ -51,6 +51,10 @@ DANGEROUS_NEW_SESSION_TARGET_FIELD = "target_session_id"
 DANGEROUS_NEW_SESSION_DESCRIPTION_FIELD = "agent_description"
 DANGEROUS_NEW_SESSION_MODEL_FIELD = "model"
 DANGEROUS_NEW_SESSION_REASONING_EFFORT_FIELD = "reasoning_effort"
+CONFIGURE_CLAUDE_FIELD = "claude"
+CONFIGURE_SHARED_STAGES_FIELD = "shared_stages"
+CONFIGURE_WORK_MODES_FIELD = "work_modes"
+CONFIGURE_AGENTS_FIELD = "agents"
 INIT_TASK_REPLY_TITLE = "Task Understanding Reply"
 INIT_RECOVERY_REPLY_TITLE = "Context Recovery Reply"
 REVIEW_PLAN_REPLY_TITLE = "Plan Review Reply"
@@ -66,6 +70,9 @@ LEGACY_HISTORY_FILENAME = "codex_session_history.json"
 DEFAULT_AGENT_NAME = "default"
 DEFAULT_AGENT_DESCRIPTION = "Primary Codex collaboration channel."
 MIGRATED_AGENT_DESCRIPTION = "Migrated primary Codex collaboration channel."
+CONFIG_VERSION = 3
+REF_DIRECTORY = ".claude/codex-skill-refs"
+REF_PATTERN = re.compile(r"\[\[REF:(?P<path>[^:\]]+?)(?:::(?P<locator>[^\]]+))?\]\]")
 
 TOOL_HELP = {
     "init": "Bootstrap Codex collaboration for a new task or recovery sync (reads JSON from stdin).",
@@ -75,6 +82,7 @@ TOOL_HELP = {
     "work-sync": "Codex-mutates sync turn for discussion, plan output, and review response (reads JSON from stdin).",
     "request-mutation": "Codex-mutates mode: Codex performs one approved mutation step (reads JSON from stdin).",
     "dangerous-new-session": "Explicitly authorize discarding continuity and starting or switching a managed Codex agent session (reads JSON from stdin).",
+    "configure": "Update the managed Codex skill config, Claude baseline, workflow guidance, or agent metadata (reads JSON from stdin).",
 }
 
 
@@ -110,7 +118,7 @@ def find_session_root(start: Path) -> Optional[Path]:
     - Never treat the global Claude Code config directory (~/.claude) as a project root.
     - `.claude/codex_agents.json` is the stable anchor.
     - `.claude/codex_session.json` is still accepted only as a legacy anchor so the wrapper can
-      migrate it once into the new array-based config.
+      migrate it once into the new structured config.
     - `.claude/` alone can exist at many levels for other purposes (local guidelines), so we do
       not auto-pick based on `.claude/` alone.
     """
@@ -163,10 +171,37 @@ def iso_now() -> str:
 class AgentConfig:
     name: str
     description: str
+    focus: Optional[str]
+    baseline: Optional[str]
+    extra_context: Optional[str]
+    stage_guidance: dict[str, str]
     session_id: Optional[str]
     model: Optional[str]
     reasoning_effort: Optional[str]
     previous_session_ids: tuple[str, ...]
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class ClaudeConfig:
+    baseline: Optional[str]
+    working_style: Optional[str]
+    extra_context: Optional[str]
+    stage_guidance: dict[str, str]
+
+
+@dataclass(frozen=True)
+class WorkModeConfig:
+    stages: dict[str, str]
+
+
+@dataclass(frozen=True)
+class SkillConfig:
+    version: int
+    claude: ClaudeConfig
+    shared_stages: dict[str, str]
+    work_modes: dict[str, WorkModeConfig]
+    agents: list[AgentConfig]
     updated_at: str
 
 
@@ -192,6 +227,22 @@ def normalize_previous_session_ids(items: object) -> tuple[str, ...]:
     return tuple(result)
 
 
+def normalize_string_map(value: object, *, field_name: str) -> dict[str, str]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{field_name} must be a JSON object when provided.")
+    result: dict[str, str] = {}
+    for raw_key, raw_value in value.items():
+        key = normalize_optional_string(raw_key)
+        if not key:
+            raise ValueError(f"{field_name} contains an empty key.")
+        if not isinstance(raw_value, str) or not raw_value.strip():
+            raise ValueError(f"{field_name}.{key} must be a non-empty string.")
+        result[key] = raw_value.strip()
+    return result
+
+
 def default_agent_description(name: str) -> str:
     if name == DEFAULT_AGENT_NAME:
         return DEFAULT_AGENT_DESCRIPTION
@@ -202,6 +253,10 @@ def build_agent_config(
     name: str,
     *,
     description: Optional[str] = None,
+    focus: Optional[str] = None,
+    baseline: Optional[str] = None,
+    extra_context: Optional[str] = None,
+    stage_guidance: Optional[dict[str, str]] = None,
     session_id: Optional[str] = None,
     model: Optional[str] = None,
     reasoning_effort: Optional[str] = None,
@@ -216,6 +271,10 @@ def build_agent_config(
     return AgentConfig(
         name=normalized_name,
         description=normalized_description,
+        focus=normalize_optional_string(focus),
+        baseline=normalize_optional_string(baseline),
+        extra_context=normalize_optional_string(extra_context),
+        stage_guidance=dict(stage_guidance or {}),
         session_id=normalize_optional_string(session_id),
         model=normalize_optional_string(model),
         reasoning_effort=normalize_optional_string(reasoning_effort),
@@ -235,6 +294,10 @@ def parse_agent_config(obj: object) -> AgentConfig:
     return AgentConfig(
         name=name,
         description=description,
+        focus=normalize_optional_string(obj.get("focus")),
+        baseline=normalize_optional_string(obj.get("baseline")),
+        extra_context=normalize_optional_string(obj.get("extra_context")),
+        stage_guidance=normalize_string_map(obj.get("stage_guidance"), field_name=f"agents[{name}].stage_guidance"),
         session_id=normalize_optional_string(obj.get("session_id")),
         model=normalize_optional_string(obj.get("model")),
         reasoning_effort=normalize_optional_string(obj.get("reasoning_effort")),
@@ -247,6 +310,10 @@ def agent_config_to_json(agent: AgentConfig) -> dict[str, object]:
     return {
         "name": agent.name,
         "description": agent.description,
+        "focus": agent.focus,
+        "baseline": agent.baseline,
+        "extra_context": agent.extra_context,
+        "stage_guidance": agent.stage_guidance,
         "session_id": agent.session_id,
         "model": agent.model,
         "reasoning_effort": agent.reasoning_effort,
@@ -255,31 +322,155 @@ def agent_config_to_json(agent: AgentConfig) -> dict[str, object]:
     }
 
 
-def read_agents_config(repo_root: Path) -> list[AgentConfig]:
-    path = agents_file_path(repo_root)
-    if not path.exists():
-        return []
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Invalid agent config JSON in {path}: {exc.msg}") from exc
-    if not isinstance(data, list):
-        raise RuntimeError(f"Agent config file must contain a JSON array: {path}")
+def default_claude_config() -> ClaudeConfig:
+    return ClaudeConfig(
+        baseline=None,
+        working_style=None,
+        extra_context=None,
+        stage_guidance={},
+    )
+
+
+def default_work_modes() -> dict[str, WorkModeConfig]:
+    return {
+        "claude_mutates": WorkModeConfig(stages={}),
+        "codex_mutates": WorkModeConfig(stages={}),
+    }
+
+
+def default_skill_config(agents: Optional[list[AgentConfig]] = None) -> SkillConfig:
+    return SkillConfig(
+        version=CONFIG_VERSION,
+        claude=default_claude_config(),
+        shared_stages={},
+        work_modes=default_work_modes(),
+        agents=list(agents or []),
+        updated_at=iso_now(),
+    )
+
+
+def parse_claude_config(obj: object) -> ClaudeConfig:
+    if obj is None:
+        return default_claude_config()
+    if not isinstance(obj, dict):
+        raise ValueError("claude must be a JSON object when provided.")
+    return ClaudeConfig(
+        baseline=normalize_optional_string(obj.get("baseline")),
+        working_style=normalize_optional_string(obj.get("working_style")),
+        extra_context=normalize_optional_string(obj.get("extra_context")),
+        stage_guidance=normalize_string_map(obj.get("stage_guidance"), field_name="claude.stage_guidance"),
+    )
+
+
+def claude_config_to_json(config: ClaudeConfig) -> dict[str, object]:
+    return {
+        "baseline": config.baseline,
+        "working_style": config.working_style,
+        "extra_context": config.extra_context,
+        "stage_guidance": config.stage_guidance,
+    }
+
+
+def parse_work_modes(obj: object) -> dict[str, WorkModeConfig]:
+    if obj is None:
+        return default_work_modes()
+    if not isinstance(obj, dict):
+        raise ValueError("work_modes must be a JSON object when provided.")
+    result = default_work_modes()
+    for mode_name, raw_mode in obj.items():
+        normalized_mode = normalize_optional_string(mode_name)
+        if not normalized_mode:
+            raise ValueError("work_modes contains an empty mode name.")
+        if not isinstance(raw_mode, dict):
+            raise ValueError(f"work_modes.{normalized_mode} must be a JSON object.")
+        stages = normalize_string_map(raw_mode.get("stages"), field_name=f"work_modes.{normalized_mode}.stages")
+        result[normalized_mode] = WorkModeConfig(stages=stages)
+    return result
+
+
+def work_modes_to_json(work_modes: dict[str, WorkModeConfig]) -> dict[str, object]:
+    return {
+        name: {
+            "stages": config.stages,
+        }
+        for name, config in work_modes.items()
+    }
+
+
+def parse_skill_config_object(obj: object, *, path: Path) -> SkillConfig:
+    if not isinstance(obj, dict):
+        raise RuntimeError(f"Agent config file must contain a JSON object or legacy JSON array: {path}")
+    agents_value = obj.get("agents")
+    if agents_value is None:
+        raise RuntimeError(f"Config object must contain an 'agents' array: {path}")
+    if not isinstance(agents_value, list):
+        raise RuntimeError(f"Config field 'agents' must be a JSON array: {path}")
     agents: list[AgentConfig] = []
     seen: set[str] = set()
-    for raw in data:
+    for raw in agents_value:
         agent = parse_agent_config(raw)
         if agent.name in seen:
             raise RuntimeError(f"Duplicate agent name in {path}: {agent.name}")
         seen.add(agent.name)
         agents.append(agent)
-    return agents
+    try:
+        shared_stages = normalize_string_map(obj.get("shared_stages"), field_name="shared_stages")
+        claude = parse_claude_config(obj.get("claude"))
+        work_modes = parse_work_modes(obj.get("work_modes"))
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+    version = obj.get("version")
+    if isinstance(version, int):
+        normalized_version = version
+    else:
+        normalized_version = CONFIG_VERSION
+    updated_at = normalize_optional_string(obj.get("updated_at")) or iso_now()
+    return SkillConfig(
+        version=normalized_version,
+        claude=claude,
+        shared_stages=shared_stages,
+        work_modes=work_modes,
+        agents=agents,
+        updated_at=updated_at,
+    )
 
 
-def write_agents_config(repo_root: Path, agents: list[AgentConfig]) -> None:
+def skill_config_to_json(config: SkillConfig) -> dict[str, object]:
+    return {
+        "version": config.version,
+        "claude": claude_config_to_json(config.claude),
+        "shared_stages": config.shared_stages,
+        "work_modes": work_modes_to_json(config.work_modes),
+        "agents": [agent_config_to_json(agent) for agent in config.agents],
+        "updated_at": config.updated_at,
+    }
+
+
+def read_skill_config(repo_root: Path) -> SkillConfig:
+    path = agents_file_path(repo_root)
+    if not path.exists():
+        return default_skill_config()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Invalid agent config JSON in {path}: {exc.msg}") from exc
+    if isinstance(data, list):
+        agents = []
+        seen: set[str] = set()
+        for raw in data:
+            agent = parse_agent_config(raw)
+            if agent.name in seen:
+                raise RuntimeError(f"Duplicate agent name in {path}: {agent.name}")
+            seen.add(agent.name)
+            agents.append(agent)
+        return default_skill_config(agents)
+    return parse_skill_config_object(data, path=path)
+
+
+def write_skill_config(repo_root: Path, config: SkillConfig) -> None:
     path = agents_file_path(repo_root)
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = [agent_config_to_json(agent) for agent in agents]
+    payload = skill_config_to_json(config)
     tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     tmp.replace(path)
@@ -315,8 +506,22 @@ def migrate_legacy_agents_config(
     default_model: Optional[str],
     default_reasoning_effort: Optional[str],
 ) -> Optional[str]:
-    if agents_file_path(repo_root).exists():
-        return None
+    config_path = agents_file_path(repo_root)
+    if config_path.exists():
+        try:
+            data = json.loads(config_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Invalid agent config JSON in {config_path}: {exc.msg}") from exc
+        if isinstance(data, dict):
+            return None
+        if isinstance(data, list):
+            migrated = default_skill_config([parse_agent_config(item) for item in data])
+            write_skill_config(repo_root, migrated)
+            return (
+                "Legacy array-based agent config was migrated to structured config at "
+                f"{config_path}."
+            )
+        raise RuntimeError(f"Agent config file must contain a JSON object or legacy JSON array: {config_path}")
 
     legacy_session_id = read_legacy_session_id(repo_root)
     legacy_history = read_legacy_session_history(repo_root)
@@ -331,7 +536,7 @@ def migrate_legacy_agents_config(
         reasoning_effort=default_reasoning_effort,
         previous_session_ids=legacy_history,
     )
-    write_agents_config(repo_root, [migrated])
+    write_skill_config(repo_root, default_skill_config([migrated]))
     return (
         "Legacy single-session config was migrated to "
         f"{agents_file_path(repo_root)} as agent '{DEFAULT_AGENT_NAME}'."
@@ -357,6 +562,92 @@ def upsert_agent(agents: list[AgentConfig], updated_agent: AgentConfig) -> list[
     if not replaced_existing:
         next_agents.append(updated_agent)
     return next_agents
+
+
+def merge_string_map(
+    current: dict[str, str],
+    patch: Optional[dict[str, Optional[str]]],
+) -> dict[str, str]:
+    updated = dict(current)
+    if not patch:
+        return updated
+    for key, value in patch.items():
+        if value is None:
+            updated.pop(key, None)
+        else:
+            updated[key] = value
+    return updated
+
+
+def apply_configure_payload(
+    config: SkillConfig,
+    payload: ConfigurePayload,
+) -> SkillConfig:
+    claude = config.claude
+    if payload.claude_patch is not None:
+        stage_patch = payload.claude_patch.get("stage_guidance")
+        claude = ClaudeConfig(
+            baseline=payload.claude_patch["baseline"] if "baseline" in payload.claude_patch else claude.baseline,
+            working_style=payload.claude_patch["working_style"] if "working_style" in payload.claude_patch else claude.working_style,
+            extra_context=payload.claude_patch["extra_context"] if "extra_context" in payload.claude_patch else claude.extra_context,
+            stage_guidance=merge_string_map(
+                claude.stage_guidance,
+                stage_patch if isinstance(stage_patch, dict) else None,
+            ),
+        )
+
+    shared_stages = merge_string_map(config.shared_stages, payload.shared_stages_patch)
+
+    work_modes = {name: WorkModeConfig(stages=dict(mode.stages)) for name, mode in config.work_modes.items()}
+    if payload.work_modes_patch:
+        for mode_name, stages_patch in payload.work_modes_patch.items():
+            current_mode = work_modes.get(mode_name, WorkModeConfig(stages={}))
+            work_modes[mode_name] = WorkModeConfig(
+                stages=merge_string_map(current_mode.stages, stages_patch),
+            )
+
+    agents = list(config.agents)
+    if payload.agents_patch:
+        for patch in payload.agents_patch:
+            name = patch["name"]
+            existing = find_agent(agents, name)
+            if existing is None:
+                updated_agent = build_agent_config(
+                    name,
+                    description=patch.get("description"),
+                    focus=patch.get("focus"),
+                    baseline=patch.get("baseline"),
+                    extra_context=patch.get("extra_context"),
+                    stage_guidance=merge_string_map({}, patch.get("stage_guidance") if isinstance(patch.get("stage_guidance"), dict) else None),
+                    model=patch.get("model"),
+                    reasoning_effort=patch.get("reasoning_effort"),
+                )
+            else:
+                updated_agent = build_agent_config(
+                    name,
+                    description=patch.get("description") if "description" in patch else existing.description,
+                    focus=patch.get("focus") if "focus" in patch else existing.focus,
+                    baseline=patch.get("baseline") if "baseline" in patch else existing.baseline,
+                    extra_context=patch.get("extra_context") if "extra_context" in patch else existing.extra_context,
+                    stage_guidance=merge_string_map(
+                        existing.stage_guidance,
+                        patch.get("stage_guidance") if isinstance(patch.get("stage_guidance"), dict) else None,
+                    ),
+                    session_id=existing.session_id,
+                    model=patch.get("model") if "model" in patch else existing.model,
+                    reasoning_effort=patch.get("reasoning_effort") if "reasoning_effort" in patch else existing.reasoning_effort,
+                    previous_session_ids=existing.previous_session_ids,
+                )
+            agents = upsert_agent(agents, updated_agent)
+
+    return SkillConfig(
+        version=CONFIG_VERSION,
+        claude=claude,
+        shared_stages=shared_stages,
+        work_modes=work_modes,
+        agents=agents,
+        updated_at=iso_now(),
+    )
 
 
 @dataclass(frozen=True)
@@ -406,6 +697,14 @@ class DangerousNewSessionPayload:
     agent_description: Optional[str]
     model: Optional[str]
     reasoning_effort: Optional[str]
+
+
+@dataclass(frozen=True)
+class ConfigurePayload:
+    claude_patch: Optional[dict[str, object]]
+    shared_stages_patch: Optional[dict[str, Optional[str]]]
+    work_modes_patch: Optional[dict[str, dict[str, Optional[str]]]]
+    agents_patch: Optional[list[dict[str, object]]]
 
 
 def parse_init_payload(stdin_text: str) -> InitPayload:
@@ -713,6 +1012,156 @@ def parse_dangerous_new_session_payload(stdin_text: str) -> DangerousNewSessionP
     )
 
 
+def parse_nullable_string_patch_map(value: object, *, field_name: str) -> dict[str, Optional[str]]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{field_name} must be a JSON object.")
+    result: dict[str, Optional[str]] = {}
+    for raw_key, raw_value in value.items():
+        key = normalize_optional_string(raw_key)
+        if not key:
+            raise ValueError(f"{field_name} contains an empty key.")
+        if raw_value is None:
+            result[key] = None
+            continue
+        if not isinstance(raw_value, str) or not raw_value.strip():
+            raise ValueError(f"{field_name}.{key} must be a non-empty string or null.")
+        result[key] = raw_value.strip()
+    return result
+
+
+def parse_configure_payload(stdin_text: str) -> ConfigurePayload:
+    text = stdin_text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not text:
+        raise ValueError(
+            "configure input is empty. Provide JSON with at least one of: claude, shared_stages, work_modes, agents."
+        )
+    try:
+        obj = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"configure input must be valid JSON: {exc.msg}") from exc
+    if not isinstance(obj, dict):
+        raise ValueError("configure input must be a JSON object.")
+
+    allowed_keys = {
+        CONFIGURE_CLAUDE_FIELD,
+        CONFIGURE_SHARED_STAGES_FIELD,
+        CONFIGURE_WORK_MODES_FIELD,
+        CONFIGURE_AGENTS_FIELD,
+    }
+    unknown_keys = set(obj.keys()) - allowed_keys
+    if unknown_keys:
+        raise ValueError(f"configure input has unsupported fields: {', '.join(sorted(unknown_keys))}")
+    if not obj:
+        raise ValueError(
+            "configure input must contain at least one of: claude, shared_stages, work_modes, agents."
+        )
+
+    claude_patch = obj.get(CONFIGURE_CLAUDE_FIELD)
+    if claude_patch is not None:
+        if not isinstance(claude_patch, dict):
+            raise ValueError("configure field claude must be a JSON object.")
+        allowed_claude_keys = {"baseline", "working_style", "extra_context", "stage_guidance"}
+        unknown_claude_keys = set(claude_patch.keys()) - allowed_claude_keys
+        if unknown_claude_keys:
+            raise ValueError(
+                "configure.claude has unsupported fields: "
+                + ", ".join(sorted(unknown_claude_keys))
+            )
+        if "stage_guidance" in claude_patch and claude_patch["stage_guidance"] is not None:
+            claude_patch = dict(claude_patch)
+            claude_patch["stage_guidance"] = parse_nullable_string_patch_map(
+                claude_patch["stage_guidance"],
+                field_name="configure.claude.stage_guidance",
+            )
+        for field in ("baseline", "working_style", "extra_context"):
+            if field in claude_patch:
+                value = claude_patch[field]
+                if value is not None and (not isinstance(value, str) or not value.strip()):
+                    raise ValueError(f"configure.claude.{field} must be a non-empty string or null.")
+                if isinstance(value, str):
+                    claude_patch[field] = value.strip()
+
+    shared_stages_patch = obj.get(CONFIGURE_SHARED_STAGES_FIELD)
+    if shared_stages_patch is not None:
+        shared_stages_patch = parse_nullable_string_patch_map(
+            shared_stages_patch,
+            field_name="configure.shared_stages",
+        )
+
+    work_modes_patch_value = obj.get(CONFIGURE_WORK_MODES_FIELD)
+    work_modes_patch: Optional[dict[str, dict[str, Optional[str]]]] = None
+    if work_modes_patch_value is not None:
+        if not isinstance(work_modes_patch_value, dict):
+            raise ValueError("configure field work_modes must be a JSON object.")
+        work_modes_patch = {}
+        for raw_mode, raw_mode_value in work_modes_patch_value.items():
+            mode_name = normalize_optional_string(raw_mode)
+            if not mode_name:
+                raise ValueError("configure.work_modes contains an empty mode name.")
+            if not isinstance(raw_mode_value, dict):
+                raise ValueError(f"configure.work_modes.{mode_name} must be a JSON object.")
+            stages_value = raw_mode_value.get("stages")
+            if stages_value is None:
+                work_modes_patch[mode_name] = {}
+            else:
+                work_modes_patch[mode_name] = parse_nullable_string_patch_map(
+                    stages_value,
+                    field_name=f"configure.work_modes.{mode_name}.stages",
+                )
+
+    agents_patch_value = obj.get(CONFIGURE_AGENTS_FIELD)
+    agents_patch: Optional[list[dict[str, object]]] = None
+    if agents_patch_value is not None:
+        if not isinstance(agents_patch_value, list):
+            raise ValueError("configure field agents must be a JSON array.")
+        agents_patch = []
+        for index, raw_agent in enumerate(agents_patch_value):
+            if not isinstance(raw_agent, dict):
+                raise ValueError(f"configure.agents[{index}] must be a JSON object.")
+            allowed_agent_keys = {
+                "name",
+                "description",
+                "focus",
+                "baseline",
+                "extra_context",
+                "stage_guidance",
+                "model",
+                "reasoning_effort",
+            }
+            unknown_agent_keys = set(raw_agent.keys()) - allowed_agent_keys
+            if unknown_agent_keys:
+                raise ValueError(
+                    f"configure.agents[{index}] has unsupported fields: {', '.join(sorted(unknown_agent_keys))}"
+                )
+            name = normalize_optional_string(raw_agent.get("name"))
+            if not name:
+                raise ValueError(f"configure.agents[{index}] requires a non-empty string field: name.")
+            normalized_agent = dict(raw_agent)
+            normalized_agent["name"] = name
+            for field in ("description", "focus", "baseline", "extra_context", "model", "reasoning_effort"):
+                if field in normalized_agent:
+                    value = normalized_agent[field]
+                    if value is not None and (not isinstance(value, str) or not value.strip()):
+                        raise ValueError(
+                            f"configure.agents[{index}].{field} must be a non-empty string or null."
+                        )
+                    if isinstance(value, str):
+                        normalized_agent[field] = value.strip()
+            if "stage_guidance" in normalized_agent and normalized_agent["stage_guidance"] is not None:
+                normalized_agent["stage_guidance"] = parse_nullable_string_patch_map(
+                    normalized_agent["stage_guidance"],
+                    field_name=f"configure.agents[{index}].stage_guidance",
+                )
+            agents_patch.append(normalized_agent)
+
+    return ConfigurePayload(
+        claude_patch=claude_patch,
+        shared_stages_patch=shared_stages_patch,
+        work_modes_patch=work_modes_patch,
+        agents_patch=agents_patch,
+    )
+
+
 def load_prompt_asset(name: str) -> str:
     path = PROMPTS_DIR / name
     try:
@@ -724,7 +1173,128 @@ def load_prompt_asset(name: str) -> str:
     return text
 
 
-def build_init_prompt(stdin_text: str) -> tuple[str, str]:
+def infer_mode_name(tool: str) -> Optional[str]:
+    if tool in {"chat", "review-my-plan", "review-my-work"}:
+        return "claude_mutates"
+    if tool in {"work-sync", "request-mutation"}:
+        return "codex_mutates"
+    return None
+
+
+def normalize_ref_path(repo_root: Path, rel_path: str) -> Path:
+    candidate = (repo_root / rel_path).resolve()
+    root = repo_root.resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError as exc:
+        raise RuntimeError(f"Reference path escapes the workspace root: {rel_path}") from exc
+    return candidate
+
+
+def collect_prompt_references(repo_root: Path, texts: list[str]) -> list[tuple[str, Optional[str]]]:
+    seen: set[tuple[str, Optional[str]]] = set()
+    ordered: list[tuple[str, Optional[str]]] = []
+    for text in texts:
+        for match in REF_PATTERN.finditer(text):
+            rel_path = match.group("path").strip()
+            locator = match.group("locator")
+            locator = locator.strip() if locator else None
+            ref = (rel_path, locator)
+            if ref in seen:
+                continue
+            path = normalize_ref_path(repo_root, rel_path)
+            if not path.exists():
+                raise RuntimeError(f"Referenced file does not exist: {rel_path}")
+            seen.add(ref)
+            ordered.append(ref)
+    return ordered
+
+
+def build_reference_notice(repo_root: Path, texts: list[str]) -> list[str]:
+    references = collect_prompt_references(repo_root, texts)
+    if not references:
+        return []
+    lines = [
+        "## Reference Handling Notice",
+        "This prompt contains structured file references in the form `[[REF:<relative-path>]]` or `[[REF:<relative-path>::<locator>]]`.",
+        "These references point to previously read or externally stored materials; they are not full inline content.",
+        "If compaction, context clear, session replacement, or continuity loss means you cannot confidently identify the referenced source and its relevant content, you must re-read the referenced material before relying on it.",
+        "Do not pretend a reference is understood if the source, location, or content is no longer clear.",
+        "",
+        "## Referenced Materials In This Call",
+    ]
+    for rel_path, locator in references:
+        token = f"[[REF:{rel_path}]]" if locator is None else f"[[REF:{rel_path}::{locator}]]"
+        lines.append(f"- {token}")
+    return ["\n".join(lines)]
+
+
+def build_prompt_context_sections(
+    repo_root: Path,
+    config: SkillConfig,
+    agent: AgentConfig,
+    *,
+    tool: str,
+) -> list[str]:
+    sections: list[str] = []
+    stage_name = tool
+    mode_name = infer_mode_name(tool)
+
+    if config.claude.baseline:
+        sections.append("## Claude Baseline\n\n" + config.claude.baseline)
+    if config.claude.working_style:
+        sections.append("## Claude Working Style\n\n" + config.claude.working_style)
+    if config.claude.extra_context:
+        sections.append("## Claude Extra Context\n\n" + config.claude.extra_context)
+
+    claude_stage_text = config.claude.stage_guidance.get(stage_name)
+    if claude_stage_text:
+        sections.append("## Claude Stage Guidance\n\n" + claude_stage_text)
+
+    shared_stage_text = config.shared_stages.get(stage_name)
+    if shared_stage_text:
+        sections.append("## Shared Stage Guidance\n\n" + shared_stage_text)
+
+    if mode_name is not None:
+        mode_config = config.work_modes.get(mode_name)
+        if mode_config is not None:
+            mode_stage_text = mode_config.stages.get(stage_name)
+            if mode_stage_text:
+                sections.append("## Workflow Stage Guidance\n\n" + mode_stage_text)
+
+    if agent.description and agent.description != default_agent_description(agent.name):
+        sections.append("## Agent Description\n\n" + agent.description)
+    if agent.focus:
+        sections.append("## Agent Focus\n\n" + agent.focus)
+    if agent.baseline:
+        sections.append("## Agent Baseline\n\n" + agent.baseline)
+    if agent.extra_context:
+        sections.append("## Agent Extra Context\n\n" + agent.extra_context)
+
+    agent_stage_text = agent.stage_guidance.get(stage_name)
+    if agent_stage_text:
+        sections.append("## Agent Stage Guidance\n\n" + agent_stage_text)
+
+    return sections
+
+
+def compose_prompt(
+    repo_root: Path,
+    config: SkillConfig,
+    agent: AgentConfig,
+    *,
+    tool: str,
+    base_parts: list[str],
+) -> str:
+    if not base_parts:
+        raise RuntimeError("compose_prompt requires at least one base part.")
+    context_sections = build_prompt_context_sections(repo_root, config, agent, tool=tool)
+    ref_notice_sections = build_reference_notice(repo_root, context_sections + base_parts[1:])
+    prompt_parts = [base_parts[0], *ref_notice_sections, *context_sections, *base_parts[1:]]
+    return "\n\n".join(part for part in prompt_parts if part).strip() + "\n"
+
+
+def build_init_prompt(repo_root: Path, config: SkillConfig, agent: AgentConfig, stdin_text: str) -> tuple[str, str]:
     payload = parse_init_payload(stdin_text)
     if payload.mode == "task":
         prompt_name = (
@@ -741,18 +1311,22 @@ def build_init_prompt(stdin_text: str) -> tuple[str, str]:
         )
         label = "Recovery background from Claude:"
 
-    prompt = "\n\n".join(
-        [
+    prompt = compose_prompt(
+        repo_root,
+        config,
+        agent,
+        tool="init",
+        base_parts=[
             load_prompt_asset(prompt_name),
             label,
             payload.background,
-        ]
-    ).strip() + "\n"
+        ],
+    )
 
     return prompt, payload.mode
 
 
-def build_review_my_plan_prompt(stdin_text: str) -> str:
+def build_review_my_plan_prompt(repo_root: Path, config: SkillConfig, agent: AgentConfig, stdin_text: str) -> str:
     payload = parse_review_my_plan_payload(stdin_text)
     parts = [
         load_prompt_asset("review-my-plan.md"),
@@ -778,10 +1352,10 @@ def build_review_my_plan_prompt(stdin_text: str) -> str:
             ]
         )
 
-    return "\n\n".join(parts).strip() + "\n"
+    return compose_prompt(repo_root, config, agent, tool="review-my-plan", base_parts=parts)
 
 
-def build_chat_prompt(stdin_text: str) -> str:
+def build_chat_prompt(repo_root: Path, config: SkillConfig, agent: AgentConfig, stdin_text: str) -> str:
     payload = parse_chat_payload(stdin_text)
     parts = [
         load_prompt_asset("chat.md"),
@@ -799,10 +1373,10 @@ def build_chat_prompt(stdin_text: str) -> str:
             ]
         )
 
-    return "\n\n".join(parts).strip() + "\n"
+    return compose_prompt(repo_root, config, agent, tool="chat", base_parts=parts)
 
 
-def build_review_my_work_prompt(stdin_text: str) -> str:
+def build_review_my_work_prompt(repo_root: Path, config: SkillConfig, agent: AgentConfig, stdin_text: str) -> str:
     payload = parse_review_my_work_payload(stdin_text)
     parts = [
         load_prompt_asset("review-my-work.md"),
@@ -828,10 +1402,10 @@ def build_review_my_work_prompt(stdin_text: str) -> str:
             ]
         )
 
-    return "\n\n".join(parts).strip() + "\n"
+    return compose_prompt(repo_root, config, agent, tool="review-my-work", base_parts=parts)
 
 
-def build_work_sync_prompt(stdin_text: str) -> str:
+def build_work_sync_prompt(repo_root: Path, config: SkillConfig, agent: AgentConfig, stdin_text: str) -> str:
     payload = parse_work_sync_payload(stdin_text)
     parts = [
         load_prompt_asset("work-sync.md"),
@@ -849,10 +1423,10 @@ def build_work_sync_prompt(stdin_text: str) -> str:
             ]
         )
 
-    return "\n\n".join(parts).strip() + "\n"
+    return compose_prompt(repo_root, config, agent, tool="work-sync", base_parts=parts)
 
 
-def build_request_mutation_prompt(stdin_text: str) -> str:
+def build_request_mutation_prompt(repo_root: Path, config: SkillConfig, agent: AgentConfig, stdin_text: str) -> str:
     payload = parse_request_mutation_payload(stdin_text)
     sandbox_note = (
         "Execution sandbox for this turn: workspace-write (default mutation sandbox)."
@@ -876,7 +1450,7 @@ def build_request_mutation_prompt(stdin_text: str) -> str:
             ]
         )
 
-    return "\n\n".join(parts).strip() + "\n"
+    return compose_prompt(repo_root, config, agent, tool="request-mutation", base_parts=parts)
 
 
 def resolve_codex_exec_sandbox(cmd: str, stdin_text: str) -> str:
@@ -960,20 +1534,26 @@ def validate_work_sync_reply(reply: str) -> str:
     return normalized
 
 
-def build_prompt(tool: str, stdin_text: str) -> str:
+def build_prompt(
+    repo_root: Path,
+    config: SkillConfig,
+    agent: AgentConfig,
+    tool: str,
+    stdin_text: str,
+) -> str:
     if tool == "init":
-        prompt, _mode = build_init_prompt(stdin_text)
+        prompt, _mode = build_init_prompt(repo_root, config, agent, stdin_text)
         return prompt
     if tool == "chat":
-        return build_chat_prompt(stdin_text)
+        return build_chat_prompt(repo_root, config, agent, stdin_text)
     if tool == "review-my-plan":
-        return build_review_my_plan_prompt(stdin_text)
+        return build_review_my_plan_prompt(repo_root, config, agent, stdin_text)
     if tool == "review-my-work":
-        return build_review_my_work_prompt(stdin_text)
+        return build_review_my_work_prompt(repo_root, config, agent, stdin_text)
     if tool == "work-sync":
-        return build_work_sync_prompt(stdin_text)
+        return build_work_sync_prompt(repo_root, config, agent, stdin_text)
     if tool == "request-mutation":
-        return build_request_mutation_prompt(stdin_text)
+        return build_request_mutation_prompt(repo_root, config, agent, stdin_text)
     raise ValueError(f"Unsupported tool: {tool}")
 
 
@@ -1051,29 +1631,39 @@ def resolve_agents_for_command(
     *,
     default_model: Optional[str],
     default_reasoning_effort: Optional[str],
-) -> tuple[list[AgentConfig], AgentConfig, Optional[str]]:
+) -> tuple[SkillConfig, AgentConfig, Optional[str]]:
     migration_notice = migrate_legacy_agents_config(
         repo_root,
         default_model=default_model,
         default_reasoning_effort=default_reasoning_effort,
     )
-    agents = read_agents_config(repo_root)
-    agent = find_agent(agents, agent_name)
+    config = read_skill_config(repo_root)
+    agent = find_agent(config.agents, agent_name)
     if agent is None:
         agent = build_agent_config(
             agent_name,
             model=default_model,
             reasoning_effort=default_reasoning_effort,
         )
-    return agents, agent, migration_notice
+    return config, agent, migration_notice
 
 
 def persist_agents_for_command(
     repo_root: Path,
-    agents: list[AgentConfig],
+    config: SkillConfig,
     agent: AgentConfig,
 ) -> None:
-    write_agents_config(repo_root, upsert_agent(agents, replace(agent, updated_at=iso_now())))
+    write_skill_config(
+        repo_root,
+        SkillConfig(
+            version=CONFIG_VERSION,
+            claude=config.claude,
+            shared_stages=config.shared_stages,
+            work_modes=config.work_modes,
+            agents=upsert_agent(config.agents, replace(agent, updated_at=iso_now())),
+            updated_at=iso_now(),
+        ),
+    )
 
 
 def append_migration_notice(reply: str, migration_notice: Optional[str]) -> str:
@@ -1083,7 +1673,7 @@ def append_migration_notice(reply: str, migration_notice: Optional[str]) -> str:
     return (
         f"{normalized}\n\n---\n"
         f"Migration notice: {migration_notice}\n"
-        "Future calls now use the array-based managed agent registry automatically.\n"
+        "Future calls now use the structured managed agent config automatically.\n"
     )
 
 
@@ -1310,14 +1900,50 @@ def main() -> int:
         eprint("Empty input. Provide content via stdin.")
         return 2
 
+    effective_default_model = args.model or DEFAULT_MODEL
+    effective_default_reasoning_effort = args.reasoning_effort or DEFAULT_REASONING_EFFORT
+
+    if args.cmd == "configure":
+        try:
+            payload = parse_configure_payload(stdin_text)
+            repo_root.mkdir(parents=True, exist_ok=True)
+            (repo_root / ".claude").mkdir(parents=True, exist_ok=True)
+            config, _agent, migration_notice = resolve_agents_for_command(
+                repo_root,
+                agent_name,
+                default_model=effective_default_model,
+                default_reasoning_effort=effective_default_reasoning_effort,
+            )
+            updated_config = apply_configure_payload(config, payload)
+            write_skill_config(repo_root, updated_config)
+        except Exception as exc:
+            eprint(str(exc))
+            return 1
+
+        lines = [
+            "configure applied.",
+            f"Target agent slot: {agent_name}",
+            f"Config path: {agents_file_path(repo_root)}",
+        ]
+        if payload.claude_patch is not None:
+            lines.append("Updated: claude")
+        if payload.shared_stages_patch is not None:
+            lines.append("Updated: shared_stages")
+        if payload.work_modes_patch is not None:
+            lines.append("Updated: work_modes")
+        if payload.agents_patch is not None:
+            lines.append(
+                "Updated agents: " + ", ".join(patch["name"] for patch in payload.agents_patch)
+            )
+        sys.stdout.write(append_migration_notice("\n".join(lines), migration_notice))
+        return 0
+
     if args.cmd == "dangerous-new-session":
         try:
             payload = parse_dangerous_new_session_payload(stdin_text)
             repo_root.mkdir(parents=True, exist_ok=True)
             (repo_root / ".claude").mkdir(parents=True, exist_ok=True)
-            effective_default_model = args.model or DEFAULT_MODEL
-            effective_default_reasoning_effort = args.reasoning_effort or DEFAULT_REASONING_EFFORT
-            agents, agent, migration_notice = resolve_agents_for_command(
+            config, agent, migration_notice = resolve_agents_for_command(
                 repo_root,
                 agent_name,
                 default_model=effective_default_model,
@@ -1361,12 +1987,16 @@ def main() -> int:
             updated_agent = build_agent_config(
                 agent.name,
                 description=next_description,
+                focus=agent.focus,
+                baseline=agent.baseline,
+                extra_context=agent.extra_context,
+                stage_guidance=agent.stage_guidance,
                 session_id=current_session_id,
                 model=effective_model,
                 reasoning_effort=effective_reasoning_effort,
                 previous_session_ids=previous_session_ids,
             )
-            persist_agents_for_command(repo_root, agents, updated_agent)
+            persist_agents_for_command(repo_root, config, updated_agent)
         except Exception as exc:
             eprint(str(exc))
             return 1
@@ -1391,10 +2021,8 @@ def main() -> int:
         sys.stdout.write(append_migration_notice("\n".join(lines), migration_notice))
         return 0
 
-    effective_default_model = args.model or DEFAULT_MODEL
-    effective_default_reasoning_effort = args.reasoning_effort or DEFAULT_REASONING_EFFORT
     try:
-        agents, agent, migration_notice = resolve_agents_for_command(
+        config, agent, migration_notice = resolve_agents_for_command(
             repo_root,
             agent_name,
             default_model=effective_default_model,
@@ -1411,9 +2039,9 @@ def main() -> int:
 
     try:
         if args.cmd == "init":
-            prompt, init_mode = build_init_prompt(stdin_text)
+            prompt, init_mode = build_init_prompt(repo_root, config, agent, stdin_text)
         else:
-            prompt = build_prompt(args.cmd, stdin_text)
+            prompt = build_prompt(repo_root, config, agent, args.cmd, stdin_text)
         sandbox_mode = resolve_codex_exec_sandbox(args.cmd, stdin_text)
         result = run_codex(
             repo_root=repo_root,
@@ -1449,7 +2077,7 @@ def main() -> int:
         reasoning_effort=agent.reasoning_effort or reasoning_effort,
         updated_at=iso_now(),
     )
-    persist_agents_for_command(repo_root, agents, updated_agent)
+    persist_agents_for_command(repo_root, config, updated_agent)
     try_promote_exec_session_to_cli(result.session_id)
 
     if init_mode is not None:

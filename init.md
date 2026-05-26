@@ -4,7 +4,7 @@ Use this as the collaboration bootstrap entrypoint.
 
 Session continuity is wrapper-managed. Claude must use the wrapper commands and must not call raw `codex` directly or manually edit/delete `<repo>/.claude/codex_agents.json`.
 
-`init` may target a specific managed agent with `--agent <name>`. If that agent does not exist yet, the wrapper creates it automatically and persists it in the array-based config.
+`init` may target a specific managed agent with `--agent <name>`. If that agent does not exist yet, the wrapper creates it automatically and persists it in the structured managed config.
 
 Claude should call `init` in three cases:
 

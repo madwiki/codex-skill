@@ -70,6 +70,10 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         name: str,
         *,
         description: Optional[str] = None,
+        focus: Optional[str] = None,
+        baseline: Optional[str] = None,
+        extra_context: Optional[str] = None,
+        stage_guidance: Optional[dict[str, str]] = None,
         session_id: Optional[str] = None,
         model: Optional[str] = None,
         reasoning_effort: Optional[str] = None,
@@ -78,10 +82,39 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         return {
             "name": name,
             "description": description or f"Agent {name}",
+            "focus": focus,
+            "baseline": baseline,
+            "extra_context": extra_context,
+            "stage_guidance": stage_guidance or {},
             "session_id": session_id,
             "model": model,
             "reasoning_effort": reasoning_effort,
             "previous_session_ids": previous_session_ids or [],
+            "updated_at": "2026-05-26T00:00:00Z",
+        }
+
+    def build_config(
+        self,
+        agents: list[dict],
+        *,
+        claude: Optional[dict] = None,
+        shared_stages: Optional[dict[str, str]] = None,
+        work_modes: Optional[dict] = None,
+    ) -> dict:
+        return {
+            "version": 3,
+            "claude": claude or {
+                "baseline": None,
+                "working_style": None,
+                "extra_context": None,
+                "stage_guidance": {},
+            },
+            "shared_stages": shared_stages or {},
+            "work_modes": work_modes or {
+                "claude_mutates": {"stages": {}},
+                "codex_mutates": {"stages": {}},
+            },
+            "agents": agents,
             "updated_at": "2026-05-26T00:00:00Z",
         }
 
@@ -98,16 +131,24 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         error: Optional[str] = None,
         extra_args: Optional[list[str]] = None,
         env_extra: Optional[dict[str, str]] = None,
+        ref_files: Optional[dict[str, str]] = None,
     ) -> Tuple[subprocess.CompletedProcess[str], Optional[dict], dict]:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
             workspace = tmp / "workspace"
             claude_dir = workspace / ".claude"
             claude_dir.mkdir(parents=True)
+            (claude_dir / "codex-skill-refs").mkdir(parents=True, exist_ok=True)
+
+            if ref_files:
+                for rel_path, content in ref_files.items():
+                    path = workspace / rel_path
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(content, encoding="utf-8")
 
             if initial_agents is not None:
                 (claude_dir / AGENTS_FILENAME).write_text(
-                    json.dumps(initial_agents, ensure_ascii=False, indent=2) + "\n",
+                    json.dumps(self.build_config(initial_agents), ensure_ascii=False, indent=2) + "\n",
                     encoding="utf-8",
                 )
 
@@ -174,7 +215,8 @@ class CodexSkillIntegrationTests(unittest.TestCase):
 
     @staticmethod
     def find_agent(state: dict, name: str) -> dict:
-        agents = state["agents_payload"] or []
+        agents_payload = state["agents_payload"] or {}
+        agents = agents_payload.get("agents", [])
         for agent in agents:
             if agent["name"] == name:
                 return agent
@@ -252,6 +294,92 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         agent = self.find_agent(state, "baseline")
         self.assertEqual(agent["model"], "gpt-test")
         self.assertEqual(agent["reasoning_effort"], "high")
+
+    def test_configure_updates_claude_and_agent_fields(self) -> None:
+        proc, _capture, state = self.run_skill(
+            "configure",
+            json.dumps(
+                {
+                    "claude": {
+                        "baseline": "Keep original requirements stable.",
+                        "working_style": "Discuss before mutating.",
+                        "stage_guidance": {
+                            "review-my-plan": "Challenge weak evidence first."
+                        },
+                    },
+                    "shared_stages": {
+                        "init": "Always re-check continuity assumptions."
+                    },
+                    "work_modes": {
+                        "claude_mutates": {
+                            "stages": {
+                                "review-my-plan": "This is still a hard gate."
+                            }
+                        }
+                    },
+                    "agents": [
+                        {
+                            "name": "reviewer-a",
+                            "focus": "Watch for architectural drift.",
+                            "baseline": "Do not let local convenience override the original task.",
+                            "stage_guidance": {
+                                "review-my-plan": "Push back on scope creep."
+                            },
+                            "model": "gpt-review",
+                            "reasoning_effort": "high",
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+            initial_agents=[self.build_agent("default", session_id="existing-session")],
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        payload = state["agents_payload"]
+        assert payload is not None
+        self.assertEqual(payload["claude"]["baseline"], "Keep original requirements stable.")
+        self.assertEqual(payload["shared_stages"]["init"], "Always re-check continuity assumptions.")
+        self.assertEqual(
+            payload["work_modes"]["claude_mutates"]["stages"]["review-my-plan"],
+            "This is still a hard gate.",
+        )
+        reviewer = self.find_agent(state, "reviewer-a")
+        self.assertEqual(reviewer["focus"], "Watch for architectural drift.")
+        self.assertEqual(reviewer["model"], "gpt-review")
+
+    def test_prompt_includes_config_sections_and_ref_notice(self) -> None:
+        proc, capture, _state = self.run_skill(
+            "review-my-plan",
+            '{"plan_for_review":"Review the plan against [[REF:.claude/codex-skill-refs/rules.md::Rule 5]]."}',
+            "approved_to_mutate: true\n\n## Plan Review Reply\n\nLooks acceptable.",
+            initial_agents=[
+                self.build_agent(
+                    "default",
+                    session_id="existing-session",
+                    focus="Watch for drift against [[REF:.claude/codex-skill-refs/rules.md::Rule 5]].",
+                    baseline="Keep the original requirements stable.",
+                    stage_guidance={"review-my-plan": "Use [[REF:.claude/codex-skill-refs/rules.md::Rule 10]]."},
+                )
+            ],
+            ref_files={
+                ".claude/codex-skill-refs/rules.md": "# Rules\n\nRule 5\nRule 10\n",
+            },
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        assert capture is not None
+        self.assertIn("## Reference Handling Notice", capture["stdin"])
+        self.assertIn("[[REF:.claude/codex-skill-refs/rules.md::Rule 5]]", capture["stdin"])
+        self.assertIn("## Agent Focus", capture["stdin"])
+        self.assertIn("## Agent Stage Guidance", capture["stdin"])
+
+    def test_missing_ref_file_fails_the_call(self) -> None:
+        proc, _capture, _state = self.run_skill(
+            "chat",
+            '{"message_for_codex":"Please keep [[REF:.claude/codex-skill-refs/missing.md::Rule 2]] in mind."}',
+            initial_agents=[self.build_agent("default", session_id="existing-session")],
+        )
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("Referenced file does not exist", proc.stderr)
 
     def test_dangerous_new_session_replaces_current_named_agent_and_records_previous_ids(self) -> None:
         proc, capture, state = self.run_skill(

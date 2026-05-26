@@ -13,10 +13,19 @@ git clone https://github.com/madwiki/codex-skill ~/.claude/skills/codex-skill
 
 ## What it does
 
-- Persists managed agent channels via `<repo>/.claude/codex_agents.json`
-- Each agent stores:
+- Persists structured managed configuration via `<repo>/.claude/codex_agents.json`
+- The config stores:
+  - top-level `claude` baseline / working style / stage guidance
+  - top-level `shared_stages`
+  - top-level `work_modes`
+  - `agents`
+- Each agent may store:
   - `name`
   - `description`
+  - `focus`
+  - `baseline`
+  - `extra_context`
+  - `stage_guidance`
   - `session_id`
   - `model`
   - `reasoning_effort`
@@ -24,9 +33,14 @@ git clone https://github.com/madwiki/codex-skill ~/.claude/skills/codex-skill
 - Automatically creates a new managed Codex session for the selected agent when that agent does not have one yet
 - Treats session continuity as wrapper-managed: use only `bin/codex-skill-*` commands, never raw `codex`, and never manually edit or delete the managed agent config
 - Uses `dangerous-new-session` only when the user explicitly wants to replace the selected managed Codex agent session, either with a fresh one or with a specific target session id
-- Automatically migrates legacy single-session files (`codex_session.json` / `codex_session_history.json`) into the new array-based agent config on first use
+- Automatically migrates legacy single-session files (`codex_session.json` / `codex_session_history.json`) into the new structured agent config on first use
 - When that one-time legacy migration happens, the wrapper includes a migration notice in the command output so Claude sees it immediately
 - Supports direct multi-agent usage through `--agent <name>`; the default agent name is `default`
+- Supports `configure` to update Claude baseline text, shared stage guidance, workflow-stage guidance, and agent-specific focus/baseline text through the skill interface
+- Supports unified file references in injected text with the format `[[REF:<relative-path>]]` or `[[REF:<relative-path>::<locator>]]`
+- When a prompt contains `[[REF:...]]`, the wrapper injects a reference notice plus a referenced-materials list; referenced files must exist inside the workspace root
+- Prefer direct narrative text for short or medium guidance. Use `[[REF:...]]` only when the underlying material is large enough that repeating it every turn would waste context.
+- `.claude/codex-skill-refs/` is the conventional place for long Codex Skill reference documents, but the unified `[[REF:...]]` format may point at any workspace file
 - Requires a persistence bootstrap on skill load: verify durable memory/`CLAUDE.md` contains the reload + init + subtask-guide rule, and add it if missing
 - Uses `init` as the bootstrap entrypoint for a new shared task, after Claude returns from compact or context clear, or when mutation ownership reverses between Claude and Codex
 - Requires `init` to declare the current mutation-owner path explicitly through `mutation_owner: "claude"` or `mutation_owner: "codex"`
@@ -51,6 +65,7 @@ Bootstrap:
 
 - `bin/codex-skill-dangerous-new-session`
 - `bin/codex-skill-init`
+- `bin/codex-skill-configure`
 
 Claude-mutates discussion:
 
@@ -70,6 +85,7 @@ Codex-mutates:
 
 - `SKILL.md`
 - `dangerous-new-session.md`
+- `configure.md`
 - `init.md`
 - `chat.md`
 - `work-sync.md`

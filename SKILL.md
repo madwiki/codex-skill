@@ -15,9 +15,20 @@ Codex is invoked by Claude; Codex does not speak to the user directly. Claude re
 
 Session continuity is wrapper-managed. Claude must use the `bin/codex-skill-*` commands instead of calling raw `codex` directly. Claude must not manually edit, delete, or replace `<repo>/.claude/codex_agents.json`. The wrapper automatically resumes the selected managed agent session when it exists, and automatically creates a new managed session when that agent does not exist yet. If the user explicitly wants to abandon an existing continuity and replace it, Claude must use `dangerous-new-session.md`.
 
-The managed config is an array of agents under `<repo>/.claude/codex_agents.json`. Each agent stores its `name`, `description`, `session_id`, `model`, `reasoning_effort`, and `previous_session_ids`. All wrapper commands accept optional `--agent <name>` to target a specific managed agent; the default agent name is `default`.
+The managed config is a structured object under `<repo>/.claude/codex_agents.json`. It contains:
+
+- top-level `claude` text fields for Claude baseline, working style, and stage guidance
+- top-level `shared_stages`
+- top-level `work_modes`
+- an `agents` array
+
+Each agent may store its `name`, `description`, `focus`, `baseline`, `extra_context`, `stage_guidance`, `session_id`, `model`, `reasoning_effort`, and `previous_session_ids`. All wrapper commands accept optional `--agent <name>` to target a specific managed agent; the default agent name is `default`.
 
 If the workspace still has the legacy single-session files (`codex_session.json` and optional `codex_session_history.json`), the wrapper auto-migrates them once into `codex_agents.json`, continues from the migrated `default` agent, and surfaces a migration notice in that command's output so Claude knows the storage model changed.
+
+When baseline text references a file, use the unified format `[[REF:<relative-path>]]` or `[[REF:<relative-path>::<locator>]]`. The wrapper does not inline referenced files automatically. Instead it injects a reference-handling notice and a referenced-materials list so Codex knows that, after compaction or continuity loss, it must re-read the referenced file before relying on that content.
+
+Prefer direct narrative text for short or medium guidance. Use `[[REF:...]]` only when the underlying material is large enough that repeating it every turn would waste context. Claude decides when to index content this way; the wrapper only provides the reference protocol and reminder behavior.
 
 ## Persistence bootstrap
 
@@ -92,6 +103,7 @@ Use only one mutation owner for a task segment to avoid conflicting edits and pr
 | Situation | Guide |
 | --- | --- |
 | The user explicitly wants to abandon continuity and replace the current managed Codex agent session, either with a fresh one or a specific target session id | `dangerous-new-session.md` |
+| Claude wants to update the managed config: Claude baseline text, shared stage guidance, workflow-stage guidance, or agent focus/baseline text | `configure.md` |
 | Bootstrap a new shared task or recover after compact/context clear | `init.md` |
 | Normal sync, requirement changes, uncertainty, stuck states, disagreements, or consensus-building on the Claude-mutates path | `chat.md` |
 | Claude will own state-changing work and wants Codex to review the plan before Claude mutates | `review-my-plan.md` |
