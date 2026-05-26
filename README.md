@@ -1,6 +1,6 @@
 # codex-skill
 
-A Claude Skill that lets Claude Code collaborate with a local Codex session, automatically resuming the managed session when it exists and automatically creating a new managed session when none exists yet.
+A Claude Skill that lets Claude Code collaborate with one or more managed Codex agents, automatically resuming the selected agent session when it exists and automatically creating a new one when that agent does not exist yet.
 
 ## Install
 
@@ -13,10 +13,19 @@ git clone https://github.com/madwiki/codex-skill ~/.claude/skills/codex-skill
 
 ## What it does
 
-- Persists and reuses the managed Codex session id via `<repo>/.claude/codex_session.json`
-- Automatically creates a managed Codex session when the workspace does not have one yet
-- Treats session continuity as wrapper-managed: use only `bin/codex-skill-*` commands, never raw `codex`, and never manually edit or delete the managed session file
-- Uses `dangerous-new-session` only when the user explicitly wants to replace the current managed Codex session, either with a fresh one or with a specific target session id
+- Persists managed agent channels via `<repo>/.claude/codex_agents.json`
+- Each agent stores:
+  - `name`
+  - `description`
+  - `session_id`
+  - `model`
+  - `reasoning_effort`
+  - `previous_session_ids`
+- Automatically creates a new managed Codex session for the selected agent when that agent does not have one yet
+- Treats session continuity as wrapper-managed: use only `bin/codex-skill-*` commands, never raw `codex`, and never manually edit or delete the managed agent config
+- Uses `dangerous-new-session` only when the user explicitly wants to replace the selected managed Codex agent session, either with a fresh one or with a specific target session id
+- Automatically migrates legacy single-session files (`codex_session.json` / `codex_session_history.json`) into the new array-based agent config on first use
+- Supports direct multi-agent usage through `--agent <name>`; the default agent name is `default`
 - Requires a persistence bootstrap on skill load: verify durable memory/`CLAUDE.md` contains the reload + init + subtask-guide rule, and add it if missing
 - Uses `init` as the bootstrap entrypoint for a new shared task, after Claude returns from compact or context clear, or when mutation ownership reverses between Claude and Codex
 - Requires `init` to declare the current mutation-owner path explicitly through `mutation_owner: "claude"` or `mutation_owner: "codex"`
@@ -34,6 +43,8 @@ git clone https://github.com/madwiki/codex-skill ~/.claude/skills/codex-skill
 - Uses a 3600-second default timeout because Codex may inspect files, reason, compact, or resume context.
 
 ## Entrypoints
+
+All wrapper commands accept an optional `--agent <name>` flag. When omitted, the wrapper uses the `default` agent.
 
 Bootstrap:
 

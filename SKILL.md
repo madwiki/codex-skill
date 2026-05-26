@@ -13,7 +13,11 @@ This skill is for Claude Code. Claude invokes Codex as a peer collaborator. Code
 
 Codex is invoked by Claude; Codex does not speak to the user directly. Claude remains responsible for user-facing conversation and for asking the user to decide unresolved issues. This does not make Claude's judgment higher than Codex's judgment.
 
-Session continuity is wrapper-managed. Claude must use the `bin/codex-skill-*` commands instead of calling raw `codex` directly. Claude must not manually edit, delete, or replace `<repo>/.claude/codex_session.json`. The wrapper automatically resumes the existing managed session when it exists, and automatically creates a new managed session when none exists yet. If the user explicitly wants to abandon an existing continuity and replace it, Claude must use `dangerous-new-session.md`.
+Session continuity is wrapper-managed. Claude must use the `bin/codex-skill-*` commands instead of calling raw `codex` directly. Claude must not manually edit, delete, or replace `<repo>/.claude/codex_agents.json`. The wrapper automatically resumes the selected managed agent session when it exists, and automatically creates a new managed session when that agent does not exist yet. If the user explicitly wants to abandon an existing continuity and replace it, Claude must use `dangerous-new-session.md`.
+
+The managed config is an array of agents under `<repo>/.claude/codex_agents.json`. Each agent stores its `name`, `description`, `session_id`, `model`, `reasoning_effort`, and `previous_session_ids`. All wrapper commands accept optional `--agent <name>` to target a specific managed agent; the default agent name is `default`.
+
+If the workspace still has the legacy single-session files (`codex_session.json` and optional `codex_session_history.json`), the wrapper auto-migrates them once into `codex_agents.json` and then continues from the migrated `default` agent.
 
 ## Persistence bootstrap
 
@@ -87,7 +91,7 @@ Use only one mutation owner for a task segment to avoid conflicting edits and pr
 
 | Situation | Guide |
 | --- | --- |
-| The user explicitly wants to abandon continuity and replace the current managed Codex session, either with a fresh one or a specific target session id | `dangerous-new-session.md` |
+| The user explicitly wants to abandon continuity and replace the current managed Codex agent session, either with a fresh one or a specific target session id | `dangerous-new-session.md` |
 | Bootstrap a new shared task or recover after compact/context clear | `init.md` |
 | Normal sync, requirement changes, uncertainty, stuck states, disagreements, or consensus-building on the Claude-mutates path | `chat.md` |
 | Claude will own state-changing work and wants Codex to review the plan before Claude mutates | `review-my-plan.md` |

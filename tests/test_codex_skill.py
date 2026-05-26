@@ -11,8 +11,9 @@ from typing import Optional, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "bin" / "codex_skill.py"
-SESSION_FILENAME = "codex_session.json"
-HISTORY_FILENAME = "codex_session_history.json"
+AGENTS_FILENAME = "codex_agents.json"
+LEGACY_SESSION_FILENAME = "codex_session.json"
+LEGACY_HISTORY_FILENAME = "codex_session_history.json"
 
 FAKE_CODEX_SOURCE = textwrap.dedent(
     """\
@@ -48,8 +49,15 @@ FAKE_CODEX_SOURCE = textwrap.dedent(
         print(forced_error, file=sys.stderr)
         sys.exit(1)
 
+    session_id = "test-session"
+    if "resume" in args:
+        try:
+            session_id = args[args.index("resume") + 1]
+        except Exception:
+            session_id = "test-session"
+
     Path(out_path).write_text(reply, encoding="utf-8")
-    print(json.dumps({"type": "session_meta", "payload": {"id": "test-session", "originator": "codex_exec", "source": "exec"}}))
+    print(json.dumps({"type": "session_meta", "payload": {"id": session_id, "originator": "codex_exec", "source": "exec"}}))
     """
 )
 
@@ -57,15 +65,39 @@ FAKE_CODEX_SOURCE = textwrap.dedent(
 class CodexSkillIntegrationTests(unittest.TestCase):
     maxDiff = None
 
+    def build_agent(
+        self,
+        name: str,
+        *,
+        description: Optional[str] = None,
+        session_id: Optional[str] = None,
+        model: Optional[str] = None,
+        reasoning_effort: Optional[str] = None,
+        previous_session_ids: Optional[list[str]] = None,
+    ) -> dict:
+        return {
+            "name": name,
+            "description": description or f"Agent {name}",
+            "session_id": session_id,
+            "model": model,
+            "reasoning_effort": reasoning_effort,
+            "previous_session_ids": previous_session_ids or [],
+            "updated_at": "2026-05-26T00:00:00Z",
+        }
+
     def run_skill(
         self,
         cmd: str,
         payload: str,
         reply: str = "",
         *,
-        session_id: Optional[str] = None,
-        history_ids: Optional[list[str]] = None,
+        agent_name: str = "default",
+        initial_agents: Optional[list[dict]] = None,
+        legacy_session_id: Optional[str] = None,
+        legacy_history_ids: Optional[list[str]] = None,
         error: Optional[str] = None,
+        extra_args: Optional[list[str]] = None,
+        env_extra: Optional[dict[str, str]] = None,
     ) -> Tuple[subprocess.CompletedProcess[str], Optional[dict], dict]:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
@@ -73,22 +105,21 @@ class CodexSkillIntegrationTests(unittest.TestCase):
             claude_dir = workspace / ".claude"
             claude_dir.mkdir(parents=True)
 
-            if session_id is not None:
-                (claude_dir / SESSION_FILENAME).write_text(
-                    json.dumps({"session_id": session_id}, ensure_ascii=False, indent=2) + "\n",
+            if initial_agents is not None:
+                (claude_dir / AGENTS_FILENAME).write_text(
+                    json.dumps(initial_agents, ensure_ascii=False, indent=2) + "\n",
                     encoding="utf-8",
                 )
 
-            if history_ids is not None:
-                (claude_dir / HISTORY_FILENAME).write_text(
-                    json.dumps(
-                        {
-                            "previous_session_ids": history_ids,
-                        },
-                        ensure_ascii=False,
-                        indent=2,
-                    )
-                    + "\n",
+            if legacy_session_id is not None:
+                (claude_dir / LEGACY_SESSION_FILENAME).write_text(
+                    json.dumps({"session_id": legacy_session_id}, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+
+            if legacy_history_ids is not None:
+                (claude_dir / LEGACY_HISTORY_FILENAME).write_text(
+                    json.dumps({"previous_session_ids": legacy_history_ids}, ensure_ascii=False, indent=2) + "\n",
                     encoding="utf-8",
                 )
 
@@ -96,22 +127,24 @@ class CodexSkillIntegrationTests(unittest.TestCase):
             fake_codex.write_text(FAKE_CODEX_SOURCE, encoding="utf-8")
             fake_codex.chmod(0o755)
 
-            home_dir = tmp / "home"
-            trash_dir = home_dir / ".Trash"
-            trash_dir.mkdir(parents=True)
-
-            capture_path = tmp / "capture.json"
             env = os.environ.copy()
             env["CODEX_BIN"] = str(fake_codex)
             env["CODEX_HOME"] = str(tmp / "codex-home")
             env["FAKE_CODEX_REPLY"] = reply
+            capture_path = tmp / "capture.json"
             env["FAKE_CODEX_CAPTURE"] = str(capture_path)
-            env["HOME"] = str(home_dir)
             if error is not None:
                 env["FAKE_CODEX_ERROR"] = error
+            if env_extra:
+                env.update(env_extra)
+
+            argv = [sys.executable, str(SCRIPT), "--cwd", str(workspace), "--agent", agent_name]
+            if extra_args:
+                argv.extend(extra_args)
+            argv.append(cmd)
 
             proc = subprocess.run(
-                [sys.executable, str(SCRIPT), "--cwd", str(workspace), cmd],
+                argv,
                 input=payload,
                 text=True,
                 capture_output=True,
@@ -123,19 +156,14 @@ class CodexSkillIntegrationTests(unittest.TestCase):
             if capture_path.exists():
                 capture = json.loads(capture_path.read_text(encoding="utf-8"))
 
+            agents_path = claude_dir / AGENTS_FILENAME
             state = {
-                "session_exists": (claude_dir / SESSION_FILENAME).exists(),
-                "session_payload": (
-                    json.loads((claude_dir / SESSION_FILENAME).read_text(encoding="utf-8"))
-                    if (claude_dir / SESSION_FILENAME).exists()
-                    else None
+                "agents_exists": agents_path.exists(),
+                "agents_payload": (
+                    json.loads(agents_path.read_text(encoding="utf-8")) if agents_path.exists() else None
                 ),
-                "history_exists": (claude_dir / HISTORY_FILENAME).exists(),
-                "history_payload": (
-                    json.loads((claude_dir / HISTORY_FILENAME).read_text(encoding="utf-8"))
-                    if (claude_dir / HISTORY_FILENAME).exists()
-                    else None
-                ),
+                "legacy_session_exists": (claude_dir / LEGACY_SESSION_FILENAME).exists(),
+                "legacy_history_exists": (claude_dir / LEGACY_HISTORY_FILENAME).exists(),
             }
             return proc, capture, state
 
@@ -144,12 +172,20 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         index = argv.index("--sandbox")
         return argv[index + 1]
 
-    def test_existing_session_is_resumed_by_default(self) -> None:
+    @staticmethod
+    def find_agent(state: dict, name: str) -> dict:
+        agents = state["agents_payload"] or []
+        for agent in agents:
+            if agent["name"] == name:
+                return agent
+        raise AssertionError(f"Agent not found in state: {name}")
+
+    def test_existing_agent_session_is_resumed_by_default(self) -> None:
         proc, capture, _state = self.run_skill(
             "review-my-plan",
             '{"plan_for_review":"Change only the prompt parser and update tests."}',
             "approved_to_mutate: true\n\n## Plan Review Reply\n\nBoundary is acceptable.",
-            session_id="resume-me",
+            initial_agents=[self.build_agent("default", session_id="resume-me")],
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         assert capture is not None
@@ -157,7 +193,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         self.assertIn("resume", capture["argv"])
         self.assertIn("resume-me", capture["argv"])
 
-    def test_init_without_managed_session_creates_new_persistent_session(self) -> None:
+    def test_init_without_agent_config_creates_new_persistent_default_agent(self) -> None:
         proc, capture, state = self.run_skill(
             "init",
             '{"task_background":"Current task brief","mutation_owner":"claude"}',
@@ -166,79 +202,109 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         assert capture is not None
         self.assertNotIn("resume", capture["argv"])
-        self.assertTrue(state["session_exists"])
-        self.assertEqual(state["session_payload"]["session_id"], "test-session")
+        self.assertTrue(state["agents_exists"])
+        agent = self.find_agent(state, "default")
+        self.assertEqual(agent["session_id"], "test-session")
+        self.assertEqual(agent["name"], "default")
 
-    def test_dangerous_new_session_replaces_current_session_and_records_history(self) -> None:
+    def test_legacy_single_session_is_migrated_once_before_resume(self) -> None:
+        proc, capture, state = self.run_skill(
+            "review-my-plan",
+            '{"plan_for_review":"Review the current plan."}',
+            "approved_to_mutate: true\n\n## Plan Review Reply\n\nLegacy migration looks fine.",
+            legacy_session_id="legacy-session",
+            legacy_history_ids=["older-session", "oldest-session"],
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        assert capture is not None
+        self.assertIn("resume", capture["argv"])
+        self.assertIn("legacy-session", capture["argv"])
+        self.assertIn("Legacy single-session config was migrated", proc.stderr)
+        agent = self.find_agent(state, "default")
+        self.assertEqual(agent["session_id"], "legacy-session")
+        self.assertEqual(agent["previous_session_ids"], ["older-session", "oldest-session"])
+
+    def test_named_agent_is_created_when_selected(self) -> None:
+        proc, _capture, state = self.run_skill(
+            "init",
+            '{"task_background":"Current task brief","mutation_owner":"codex"}',
+            "## Task Understanding Reply\n\nSwitch to Codex-owned execution.",
+            agent_name="reviewer-a",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        agent = self.find_agent(state, "reviewer-a")
+        self.assertEqual(agent["session_id"], "test-session")
+        self.assertEqual(agent["description"], "Codex collaboration channel 'reviewer-a'.")
+
+    def test_effective_defaults_are_persisted_for_new_agent(self) -> None:
+        proc, _capture, state = self.run_skill(
+            "init",
+            '{"task_background":"Current task brief","mutation_owner":"claude"}',
+            "## Task Understanding Reply\n\nLooks consistent.",
+            agent_name="baseline",
+            env_extra={
+                "CODEX_MODEL": "gpt-test",
+                "CODEX_REASONING_EFFORT": "high",
+            },
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        agent = self.find_agent(state, "baseline")
+        self.assertEqual(agent["model"], "gpt-test")
+        self.assertEqual(agent["reasoning_effort"], "high")
+
+    def test_dangerous_new_session_replaces_current_named_agent_and_records_previous_ids(self) -> None:
         proc, capture, state = self.run_skill(
             "dangerous-new-session",
             '{"user_permission":"The user explicitly asked to abandon the old Codex continuity and start fresh."}',
             "fresh managed session ready.",
-            session_id="old-session",
-            history_ids=["older-session", "oldest-session"],
+            agent_name="reviewer-a",
+            initial_agents=[
+                self.build_agent("default", session_id="default-session", previous_session_ids=["older-default"]),
+                self.build_agent("reviewer-a", session_id="old-session", previous_session_ids=["older-session", "oldest-session"]),
+            ],
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         assert capture is not None
         self.assertEqual(self.sandbox_from_argv(capture["argv"]), "read-only")
         self.assertNotIn("resume", capture["argv"])
-        self.assertTrue(state["session_exists"])
-        self.assertEqual(state["session_payload"]["session_id"], "test-session")
-        self.assertTrue(state["history_exists"])
-        self.assertEqual(
-            state["history_payload"]["previous_session_ids"],
-            ["old-session", "older-session"],
-        )
-        self.assertIn("dangerous-new-session authorized", proc.stdout)
-        self.assertIn("test-session", proc.stdout)
+        reviewer = self.find_agent(state, "reviewer-a")
+        self.assertEqual(reviewer["session_id"], "test-session")
+        self.assertEqual(reviewer["previous_session_ids"], ["old-session", "older-session"])
+        default = self.find_agent(state, "default")
+        self.assertEqual(default["session_id"], "default-session")
+        self.assertIn("Target agent: reviewer-a", proc.stdout)
 
-    def test_dangerous_new_session_can_switch_to_target_session_id(self) -> None:
+    def test_dangerous_new_session_can_switch_target_session_id_and_update_saved_settings(self) -> None:
         proc, capture, state = self.run_skill(
             "dangerous-new-session",
-            '{"user_permission":"The user explicitly asked to switch back to a specific prior Codex session.","target_session_id":"restored-session"}',
-            session_id="current-session",
-            history_ids=["older-session", "oldest-session"],
+            '{"user_permission":"The user explicitly asked to switch back to a specific prior Codex session.","target_session_id":"restored-session","agent_description":"Reviewer A for plan gate.","model":"gpt-review","reasoning_effort":"medium"}',
+            agent_name="reviewer-a",
+            initial_agents=[
+                self.build_agent(
+                    "reviewer-a",
+                    description="Old description",
+                    session_id="current-session",
+                    model="old-model",
+                    reasoning_effort="low",
+                    previous_session_ids=["older-session", "oldest-session"],
+                )
+            ],
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIsNone(capture)
-        self.assertTrue(state["session_exists"])
-        self.assertEqual(state["session_payload"]["session_id"], "restored-session")
-        self.assertTrue(state["history_exists"])
-        self.assertEqual(
-            state["history_payload"]["previous_session_ids"],
-            ["current-session", "older-session"],
-        )
-        self.assertIn("target session id: restored-session", proc.stdout)
-
-    def test_dangerous_new_session_without_prior_session_still_writes_current_session(self) -> None:
-        proc, capture, state = self.run_skill(
-            "dangerous-new-session",
-            '{"user_permission":"The user explicitly wants a fresh session."}',
-            "fresh managed session ready.",
-        )
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        assert capture is not None
-        self.assertEqual(self.sandbox_from_argv(capture["argv"]), "read-only")
-        self.assertNotIn("resume", capture["argv"])
-        self.assertTrue(state["session_exists"])
-        self.assertFalse(state["history_exists"])
-
-    def test_init_task_codex_uses_role_specific_prompt_when_new_session_is_created(self) -> None:
-        proc, capture, _state = self.run_skill(
-            "init",
-            '{"task_background":"Current task brief","mutation_owner":"codex"}',
-            "## Task Understanding Reply\n\nSwitch to Codex-owned execution.",
-        )
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        assert capture is not None
-        self.assertIn("fresh task brief on the Codex-mutates path", capture["stdin"])
-        self.assertIn("Codex owns state-changing work on this path", capture["stdin"])
+        reviewer = self.find_agent(state, "reviewer-a")
+        self.assertEqual(reviewer["session_id"], "restored-session")
+        self.assertEqual(reviewer["description"], "Reviewer A for plan gate.")
+        self.assertEqual(reviewer["model"], "gpt-review")
+        self.assertEqual(reviewer["reasoning_effort"], "medium")
+        self.assertEqual(reviewer["previous_session_ids"], ["current-session", "older-session"])
 
     def test_work_sync_uses_read_only_and_accepts_markdown_sections(self) -> None:
         proc, capture, _state = self.run_skill(
             "work-sync",
             '{"sync_message":"Please respond to the current review feedback."}',
             "## Discussion Reply\n\nI agree with the concern.\n\n## Plan\n\nRepair the parser first.",
-            session_id="existing-session",
+            initial_agents=[self.build_agent("default", session_id="existing-session")],
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         assert capture is not None
@@ -251,7 +317,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
             "request-mutation",
             '{"approved_mutation":"Implement the approved parser fix and stop."}',
             "Updated parser, ran validation, stopped for review.",
-            session_id="existing-session",
+            initial_agents=[self.build_agent("default", session_id="existing-session")],
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         assert capture is not None
@@ -264,31 +330,34 @@ class CodexSkillIntegrationTests(unittest.TestCase):
             "request-mutation",
             '{"approved_mutation":"Run the approved repair step.","sandbox_mode":"full-access"}',
             "Ran the approved repair under full access and stopped.",
-            session_id="existing-session",
+            initial_agents=[self.build_agent("default", session_id="existing-session")],
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         assert capture is not None
         self.assertEqual(self.sandbox_from_argv(capture["argv"]), "danger-full-access")
-        self.assertIn("danger-full-access (explicit full-access escalation approved by Claude)", capture["stdin"])
+        self.assertIn(
+            "danger-full-access (explicit full-access escalation approved by Claude)",
+            capture["stdin"],
+        )
 
     def test_missing_thread_error_requires_explicit_dangerous_reset(self) -> None:
         proc, _capture, _state = self.run_skill(
             "review-my-work",
             '{"work_for_review":"Please review the completed work."}',
-            session_id="stale-session",
+            initial_agents=[self.build_agent("default", session_id="stale-session")],
             error="thread stale-session not found",
         )
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("could not resume", proc.stderr)
         self.assertIn("dangerous-new-session", proc.stderr)
-        self.assertIn("Do not manually delete or replace the session file", proc.stderr)
+        self.assertIn("managed agent 'default'", proc.stderr)
 
     def test_review_my_plan_rejects_legacy_json_reply(self) -> None:
         proc, _capture, _state = self.run_skill(
             "review-my-plan",
             '{"plan_for_review":"Change only the prompt parser and update tests."}',
             '{"approved_to_mutate":true,"plan_review_reply":"legacy json"}',
-            session_id="existing-session",
+            initial_agents=[self.build_agent("default", session_id="existing-session")],
         )
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("approved_to_mutate must be the first non-empty line", proc.stderr)

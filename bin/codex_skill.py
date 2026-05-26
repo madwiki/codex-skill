@@ -8,7 +8,7 @@ import re
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator, Optional, Tuple
@@ -48,6 +48,9 @@ REQUEST_MUTATION_SANDBOX_DEFAULT = "default"
 REQUEST_MUTATION_SANDBOX_FULL_ACCESS = "full-access"
 DANGEROUS_NEW_SESSION_PERMISSION_FIELD = "user_permission"
 DANGEROUS_NEW_SESSION_TARGET_FIELD = "target_session_id"
+DANGEROUS_NEW_SESSION_DESCRIPTION_FIELD = "agent_description"
+DANGEROUS_NEW_SESSION_MODEL_FIELD = "model"
+DANGEROUS_NEW_SESSION_REASONING_EFFORT_FIELD = "reasoning_effort"
 INIT_TASK_REPLY_TITLE = "Task Understanding Reply"
 INIT_RECOVERY_REPLY_TITLE = "Context Recovery Reply"
 REVIEW_PLAN_REPLY_TITLE = "Plan Review Reply"
@@ -57,6 +60,12 @@ WORK_SYNC_PLAN_TITLE = "Plan"
 SANDBOX_READ_ONLY = "read-only"
 SANDBOX_WORKSPACE_WRITE = "workspace-write"
 SANDBOX_DANGER_FULL_ACCESS = "danger-full-access"
+AGENTS_FILENAME = "codex_agents.json"
+LEGACY_SESSION_FILENAME = "codex_session.json"
+LEGACY_HISTORY_FILENAME = "codex_session_history.json"
+DEFAULT_AGENT_NAME = "default"
+DEFAULT_AGENT_DESCRIPTION = "Primary Codex collaboration channel."
+MIGRATED_AGENT_DESCRIPTION = "Migrated primary Codex collaboration channel."
 
 TOOL_HELP = {
     "init": "Bootstrap Codex collaboration for a new task or recovery sync (reads JSON from stdin).",
@@ -65,7 +74,7 @@ TOOL_HELP = {
     "review-my-work": "Claude-mutates mode: Codex reviews Claude's work without mutating state (reads JSON from stdin).",
     "work-sync": "Codex-mutates sync turn for discussion, plan output, and review response (reads JSON from stdin).",
     "request-mutation": "Codex-mutates mode: Codex performs one approved mutation step (reads JSON from stdin).",
-    "dangerous-new-session": "Explicitly authorize discarding continuity and starting a fresh managed Codex session (reads JSON from stdin).",
+    "dangerous-new-session": "Explicitly authorize discarding continuity and starting or switching a managed Codex agent session (reads JSON from stdin).",
 }
 
 
@@ -99,15 +108,19 @@ def find_session_root(start: Path) -> Optional[Path]:
 
     IMPORTANT:
     - Never treat the global Claude Code config directory (~/.claude) as a project root.
-    - `.claude/codex_session.json` is the stable anchor. `.claude/` alone can exist at many
-      levels for other purposes (local guidelines),
-      so we do not auto-pick based on `.claude/` alone.
+    - `.claude/codex_agents.json` is the stable anchor.
+    - `.claude/codex_session.json` is still accepted only as a legacy anchor so the wrapper can
+      migrate it once into the new array-based config.
+    - `.claude/` alone can exist at many levels for other purposes (local guidelines), so we do
+      not auto-pick based on `.claude/` alone.
     """
     for p in iter_ancestors(start):
         claude_dir = p / ".claude"
         if is_global_claude_dir(claude_dir):
             continue
-        if (claude_dir / "codex_session.json").is_file():
+        if (claude_dir / AGENTS_FILENAME).is_file():
+            return p
+        if (claude_dir / LEGACY_SESSION_FILENAME).is_file():
             return p
     return None
 
@@ -125,80 +138,225 @@ def candidate_roots_with_claude_dir(start: Path, limit: int = 5) -> list[Path]:
     return candidates
 
 
-def session_file_path(repo_root: Path) -> Path:
-    return repo_root / ".claude" / "codex_session.json"
+def agents_file_path(repo_root: Path) -> Path:
+    return repo_root / ".claude" / AGENTS_FILENAME
 
 
-def session_history_file_path(repo_root: Path) -> Path:
-    return repo_root / ".claude" / "codex_session_history.json"
+def legacy_session_file_path(repo_root: Path) -> Path:
+    return repo_root / ".claude" / LEGACY_SESSION_FILENAME
 
 
-def read_session_id(repo_root: Path) -> Optional[str]:
-    path = session_file_path(repo_root)
+def legacy_session_history_file_path(repo_root: Path) -> Path:
+    return repo_root / ".claude" / LEGACY_HISTORY_FILENAME
+
+
+def iso_now() -> str:
+    return (
+        datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+
+@dataclass(frozen=True)
+class AgentConfig:
+    name: str
+    description: str
+    session_id: Optional[str]
+    model: Optional[str]
+    reasoning_effort: Optional[str]
+    previous_session_ids: tuple[str, ...]
+    updated_at: str
+
+
+def normalize_optional_string(value: object) -> Optional[str]:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def normalize_previous_session_ids(items: object) -> tuple[str, ...]:
+    if not isinstance(items, list):
+        return ()
+    result: list[str] = []
+    for item in items:
+        normalized = normalize_optional_string(item)
+        if normalized and normalized not in result:
+            result.append(normalized)
+        if len(result) >= 2:
+            break
+    return tuple(result)
+
+
+def default_agent_description(name: str) -> str:
+    if name == DEFAULT_AGENT_NAME:
+        return DEFAULT_AGENT_DESCRIPTION
+    return f"Codex collaboration channel '{name}'."
+
+
+def build_agent_config(
+    name: str,
+    *,
+    description: Optional[str] = None,
+    session_id: Optional[str] = None,
+    model: Optional[str] = None,
+    reasoning_effort: Optional[str] = None,
+    previous_session_ids: tuple[str, ...] = (),
+) -> AgentConfig:
+    normalized_name = normalize_optional_string(name)
+    if not normalized_name:
+        raise ValueError("Agent name must be a non-empty string.")
+    normalized_description = normalize_optional_string(description) or default_agent_description(
+        normalized_name
+    )
+    return AgentConfig(
+        name=normalized_name,
+        description=normalized_description,
+        session_id=normalize_optional_string(session_id),
+        model=normalize_optional_string(model),
+        reasoning_effort=normalize_optional_string(reasoning_effort),
+        previous_session_ids=normalize_previous_session_ids(list(previous_session_ids)),
+        updated_at=iso_now(),
+    )
+
+
+def parse_agent_config(obj: object) -> AgentConfig:
+    if not isinstance(obj, dict):
+        raise ValueError("Each agent entry must be a JSON object.")
+    name = normalize_optional_string(obj.get("name"))
+    if not name:
+        raise ValueError("Each agent entry requires a non-empty string field: name.")
+    description = normalize_optional_string(obj.get("description")) or default_agent_description(name)
+    updated_at = normalize_optional_string(obj.get("updated_at")) or iso_now()
+    return AgentConfig(
+        name=name,
+        description=description,
+        session_id=normalize_optional_string(obj.get("session_id")),
+        model=normalize_optional_string(obj.get("model")),
+        reasoning_effort=normalize_optional_string(obj.get("reasoning_effort")),
+        previous_session_ids=normalize_previous_session_ids(obj.get("previous_session_ids")),
+        updated_at=updated_at,
+    )
+
+
+def agent_config_to_json(agent: AgentConfig) -> dict[str, object]:
+    return {
+        "name": agent.name,
+        "description": agent.description,
+        "session_id": agent.session_id,
+        "model": agent.model,
+        "reasoning_effort": agent.reasoning_effort,
+        "previous_session_ids": list(agent.previous_session_ids),
+        "updated_at": agent.updated_at,
+    }
+
+
+def read_agents_config(repo_root: Path) -> list[AgentConfig]:
+    path = agents_file_path(repo_root)
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Invalid agent config JSON in {path}: {exc.msg}") from exc
+    if not isinstance(data, list):
+        raise RuntimeError(f"Agent config file must contain a JSON array: {path}")
+    agents: list[AgentConfig] = []
+    seen: set[str] = set()
+    for raw in data:
+        agent = parse_agent_config(raw)
+        if agent.name in seen:
+            raise RuntimeError(f"Duplicate agent name in {path}: {agent.name}")
+        seen.add(agent.name)
+        agents.append(agent)
+    return agents
+
+
+def write_agents_config(repo_root: Path, agents: list[AgentConfig]) -> None:
+    path = agents_file_path(repo_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = [agent_config_to_json(agent) for agent in agents]
+    tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(path)
+
+
+def read_legacy_session_id(repo_root: Path) -> Optional[str]:
+    path = legacy_session_file_path(repo_root)
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         if isinstance(data, dict):
             sid = data.get("session_id")
-            if isinstance(sid, str) and sid:
-                return sid
+            if isinstance(sid, str) and sid.strip():
+                return sid.strip()
     except Exception:
         return None
     return None
 
 
-def write_session_id(repo_root: Path, session_id: str) -> None:
-    path = session_file_path(repo_root)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "session_id": session_id,
-        "updated_at": datetime.now(timezone.utc)
-        .replace(microsecond=0)
-        .isoformat()
-        .replace("+00:00", "Z"),
-    }
-    tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    tmp.replace(path)
-
-
-def read_session_history(repo_root: Path) -> list[str]:
-    path = session_history_file_path(repo_root)
+def read_legacy_session_history(repo_root: Path) -> tuple[str, ...]:
+    path = legacy_session_history_file_path(repo_root)
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            return []
-        previous = data.get("previous_session_ids")
-        if not isinstance(previous, list):
-            return []
-        result: list[str] = []
-        for item in previous:
-            if isinstance(item, str) and item and item not in result:
-                result.append(item)
-        return result
     except Exception:
-        return []
+        return ()
+    if not isinstance(data, dict):
+        return ()
+    return normalize_previous_session_ids(data.get("previous_session_ids"))
 
 
-def clear_session_history(repo_root: Path) -> None:
-    try:
-        session_history_file_path(repo_root).unlink(missing_ok=True)  # type: ignore[call-arg]
-    except Exception:
-        return
+def migrate_legacy_agents_config(
+    repo_root: Path,
+    *,
+    default_model: Optional[str],
+    default_reasoning_effort: Optional[str],
+) -> Optional[str]:
+    if agents_file_path(repo_root).exists():
+        return None
+
+    legacy_session_id = read_legacy_session_id(repo_root)
+    legacy_history = read_legacy_session_history(repo_root)
+    if legacy_session_id is None and not legacy_history:
+        return None
+
+    migrated = build_agent_config(
+        DEFAULT_AGENT_NAME,
+        description=MIGRATED_AGENT_DESCRIPTION,
+        session_id=legacy_session_id,
+        model=default_model,
+        reasoning_effort=default_reasoning_effort,
+        previous_session_ids=legacy_history,
+    )
+    write_agents_config(repo_root, [migrated])
+    return (
+        "Legacy single-session config was migrated to "
+        f"{agents_file_path(repo_root)} as agent '{DEFAULT_AGENT_NAME}'."
+    )
 
 
-def write_session_history(repo_root: Path, previous_session_ids: list[str]) -> None:
-    path = session_history_file_path(repo_root)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "previous_session_ids": previous_session_ids[:2],
-        "updated_at": datetime.now(timezone.utc)
-        .replace(microsecond=0)
-        .isoformat()
-        .replace("+00:00", "Z"),
-    }
-    tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    tmp.replace(path)
+def find_agent(agents: list[AgentConfig], name: str) -> Optional[AgentConfig]:
+    for agent in agents:
+        if agent.name == name:
+            return agent
+    return None
+
+
+def upsert_agent(agents: list[AgentConfig], updated_agent: AgentConfig) -> list[AgentConfig]:
+    next_agents: list[AgentConfig] = []
+    replaced_existing = False
+    for agent in agents:
+        if agent.name == updated_agent.name:
+            next_agents.append(updated_agent)
+            replaced_existing = True
+        else:
+            next_agents.append(agent)
+    if not replaced_existing:
+        next_agents.append(updated_agent)
+    return next_agents
 
 
 @dataclass(frozen=True)
@@ -245,6 +403,9 @@ class RequestMutationPayload:
 class DangerousNewSessionPayload:
     user_permission: str
     target_session_id: Optional[str]
+    agent_description: Optional[str]
+    model: Optional[str]
+    reasoning_effort: Optional[str]
 
 
 def parse_init_payload(stdin_text: str) -> InitPayload:
@@ -508,6 +669,9 @@ def parse_dangerous_new_session_payload(stdin_text: str) -> DangerousNewSessionP
     allowed_keys = {
         DANGEROUS_NEW_SESSION_PERMISSION_FIELD,
         DANGEROUS_NEW_SESSION_TARGET_FIELD,
+        DANGEROUS_NEW_SESSION_DESCRIPTION_FIELD,
+        DANGEROUS_NEW_SESSION_MODEL_FIELD,
+        DANGEROUS_NEW_SESSION_REASONING_EFFORT_FIELD,
     }
     unknown_keys = set(obj.keys()) - allowed_keys
     if unknown_keys:
@@ -530,9 +694,22 @@ def parse_dangerous_new_session_payload(stdin_text: str) -> DangerousNewSessionP
             )
         target_session_id = target_session_id.strip()
 
+    def parse_optional_config_string(field: str) -> Optional[str]:
+        value = obj.get(field)
+        if value is None:
+            return None
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(
+                f"dangerous-new-session field {field} must be a non-empty string when provided."
+            )
+        return value.strip()
+
     return DangerousNewSessionPayload(
         user_permission=user_permission.strip(),
         target_session_id=target_session_id,
+        agent_description=parse_optional_config_string(DANGEROUS_NEW_SESSION_DESCRIPTION_FIELD),
+        model=parse_optional_config_string(DANGEROUS_NEW_SESSION_MODEL_FIELD),
+        reasoning_effort=parse_optional_config_string(DANGEROUS_NEW_SESSION_REASONING_EFFORT_FIELD),
     )
 
 
@@ -836,21 +1013,20 @@ class CodexRunResult:
 
 def build_dangerous_new_session_prompt(permission_text: str) -> str:
     return (
-        "You are creating a fresh managed Codex session for future collaboration.\n"
+        "You are creating a fresh managed Codex agent session for future collaboration.\n"
         "This call exists only to establish a new session id.\n"
         "Do not ask questions. Do not assume prior task continuity.\n"
         "Reply with a short plain-text acknowledgment that the fresh managed session is ready.\n\n"
-        "User permission for replacing the prior managed session:\n"
+        "User permission for replacing the prior managed continuity:\n"
         f"{permission_text}\n"
     )
 
 
-def update_session_history_for_replacement(
-    repo_root: Path,
+def update_previous_session_ids_for_replacement(
+    previous_session_ids: tuple[str, ...],
     previous_session_id: Optional[str],
     current_session_id: str,
-) -> list[str]:
-    history = read_session_history(repo_root)
+) -> tuple[str, ...]:
     updated: list[str] = []
     if (
         isinstance(previous_session_id, str)
@@ -858,20 +1034,46 @@ def update_session_history_for_replacement(
         and previous_session_id != current_session_id
     ):
         updated.append(previous_session_id)
-    for item in history:
+    for item in previous_session_ids:
         if item not in updated and item != current_session_id:
             updated.append(item)
-    updated = updated[:2]
-    if updated:
-        write_session_history(repo_root, updated)
-    else:
-        clear_session_history(repo_root)
-    return updated
+    return tuple(updated[:2])
 
 
 def looks_like_missing_thread_error(message: str) -> bool:
     lowered = message.lower()
     return "thread" in lowered and "not found" in lowered
+
+
+def resolve_agents_for_command(
+    repo_root: Path,
+    agent_name: str,
+    *,
+    default_model: Optional[str],
+    default_reasoning_effort: Optional[str],
+) -> tuple[list[AgentConfig], AgentConfig, Optional[str]]:
+    migration_notice = migrate_legacy_agents_config(
+        repo_root,
+        default_model=default_model,
+        default_reasoning_effort=default_reasoning_effort,
+    )
+    agents = read_agents_config(repo_root)
+    agent = find_agent(agents, agent_name)
+    if agent is None:
+        agent = build_agent_config(
+            agent_name,
+            model=default_model,
+            reasoning_effort=default_reasoning_effort,
+        )
+    return agents, agent, migration_notice
+
+
+def persist_agents_for_command(
+    repo_root: Path,
+    agents: list[AgentConfig],
+    agent: AgentConfig,
+) -> None:
+    write_agents_config(repo_root, upsert_agent(agents, replace(agent, updated_at=iso_now())))
 
 
 def run_codex(
@@ -1041,6 +1243,11 @@ def main() -> int:
         default=None,
         help="Working directory used to locate the project session root.",
     )
+    parser.add_argument(
+        "--agent",
+        default=DEFAULT_AGENT_NAME,
+        help="Target agent name inside .claude/codex_agents.json (default: default).",
+    )
     parser.add_argument("--timeout-s", type=int, default=3600, help="codex exec timeout in seconds.")
     parser.add_argument("--model", default=None, help="Optional model override for this call.")
     parser.add_argument("--reasoning-effort", default=None, help="Optional reasoning effort override for this call.")
@@ -1050,6 +1257,10 @@ def main() -> int:
         sub.add_parser(name, help=TOOL_HELP[name])
 
     args = parser.parse_args()
+    agent_name = normalize_optional_string(args.agent)
+    if not agent_name:
+        eprint("--agent must be a non-empty string.")
+        return 2
 
     cwd_explicit = args.cwd is not None
     start_cwd = Path(args.cwd).expanduser() if cwd_explicit else Path.cwd()
@@ -1067,7 +1278,8 @@ def main() -> int:
         lines = [
             "No project Codex session root is configured.",
             "Could not find an existing managed session anchor:",
-            "  - <dir>/.claude/codex_session.json",
+            f"  - <dir>/.claude/{AGENTS_FILENAME}",
+            f"  - <dir>/.claude/{LEGACY_SESSION_FILENAME} (legacy, auto-migrated once)",
             f"(excluding the global Claude Code directory: {CLAUDE_GLOBAL_DIR}).",
             "",
             "Ask the user to choose a directory to store the Codex session for this workspace.",
@@ -1092,12 +1304,26 @@ def main() -> int:
             payload = parse_dangerous_new_session_payload(stdin_text)
             repo_root.mkdir(parents=True, exist_ok=True)
             (repo_root / ".claude").mkdir(parents=True, exist_ok=True)
-            previous_session_id = read_session_id(repo_root)
+            effective_default_model = args.model or DEFAULT_MODEL
+            effective_default_reasoning_effort = args.reasoning_effort or DEFAULT_REASONING_EFFORT
+            agents, agent, migration_notice = resolve_agents_for_command(
+                repo_root,
+                agent_name,
+                default_model=effective_default_model,
+                default_reasoning_effort=effective_default_reasoning_effort,
+            )
+            previous_session_id = agent.session_id
+            effective_model = payload.model or agent.model or effective_default_model
+            effective_reasoning_effort = (
+                payload.reasoning_effort
+                or agent.reasoning_effort
+                or effective_default_reasoning_effort
+            )
+            next_description = payload.agent_description or agent.description
             if payload.target_session_id:
                 current_session_id = payload.target_session_id
-                write_session_id(repo_root, current_session_id)
-                previous_session_ids = update_session_history_for_replacement(
-                    repo_root,
+                previous_session_ids = update_previous_session_ids_for_replacement(
+                    agent.previous_session_ids,
                     previous_session_id,
                     current_session_id,
                 )
@@ -1110,45 +1336,68 @@ def main() -> int:
                     prompt=prompt,
                     sandbox_mode=SANDBOX_READ_ONLY,
                     timeout_s=args.timeout_s,
-                    model=args.model or DEFAULT_MODEL,
-                    reasoning_effort=args.reasoning_effort or DEFAULT_REASONING_EFFORT,
+                    model=effective_model,
+                    reasoning_effort=effective_reasoning_effort,
                 )
                 current_session_id = result.session_id
-                write_session_id(repo_root, current_session_id)
                 try_promote_exec_session_to_cli(current_session_id)
-                previous_session_ids = update_session_history_for_replacement(
-                    repo_root,
+                previous_session_ids = update_previous_session_ids_for_replacement(
+                    agent.previous_session_ids,
                     previous_session_id,
                     current_session_id,
                 )
                 switched_to_existing = False
+            updated_agent = build_agent_config(
+                agent.name,
+                description=next_description,
+                session_id=current_session_id,
+                model=effective_model,
+                reasoning_effort=effective_reasoning_effort,
+                previous_session_ids=previous_session_ids,
+            )
+            persist_agents_for_command(repo_root, agents, updated_agent)
         except Exception as exc:
             eprint(str(exc))
             return 1
 
+        if migration_notice:
+            eprint(migration_notice)
         lines = [
             "dangerous-new-session authorized.",
+            f"Target agent: {agent_name}",
             (
-                f"Managed session file now points to target session id: {current_session_id}"
+                f"Managed agent now points to target session id: {current_session_id}"
                 if switched_to_existing
-                else f"Managed session file now points to fresh session id: {current_session_id}"
+                else f"Managed agent now points to fresh session id: {current_session_id}"
             ),
-            "Do not call raw `codex` directly and do not edit the managed session file manually.",
+            "Do not call raw `codex` directly and do not edit the managed agent config manually.",
         ]
         if previous_session_ids:
             lines.append(
-                "Recorded previous session ids (newest first): "
+                "Recorded previous session ids for this agent (newest first): "
                 + ", ".join(previous_session_ids)
             )
         else:
-            lines.append("There was no prior managed session id to record.")
+            lines.append("There was no prior managed session id for this agent to record.")
         sys.stdout.write("\n".join(lines) + "\n")
         return 0
 
-    session_id = read_session_id(repo_root)
+    effective_default_model = args.model or DEFAULT_MODEL
+    effective_default_reasoning_effort = args.reasoning_effort or DEFAULT_REASONING_EFFORT
+    try:
+        agents, agent, migration_notice = resolve_agents_for_command(
+            repo_root,
+            agent_name,
+            default_model=effective_default_model,
+            default_reasoning_effort=effective_default_reasoning_effort,
+        )
+    except Exception as exc:
+        eprint(str(exc))
+        return 1
 
-    model = args.model or DEFAULT_MODEL
-    reasoning_effort = args.reasoning_effort or DEFAULT_REASONING_EFFORT
+    session_id = agent.session_id
+    model = args.model or agent.model or DEFAULT_MODEL
+    reasoning_effort = args.reasoning_effort or agent.reasoning_effort or DEFAULT_REASONING_EFFORT
     init_mode: Optional[str] = None
 
     try:
@@ -1173,8 +1422,8 @@ def main() -> int:
                     [
                         str(exc),
                         "",
-                        "The managed Codex session id exists locally, but Codex could not resume it.",
-                        "Do not manually delete or replace the session file and do not call raw `codex` directly.",
+                        f"The managed agent '{agent_name}' has a stored session id locally, but Codex could not resume it.",
+                        "Do not manually delete or replace the managed agent config and do not call raw `codex` directly.",
                         "If the user explicitly wants to abandon this continuity and start fresh, run "
                         "<skill_root>/bin/codex-skill-dangerous-new-session.",
                     ]
@@ -1184,7 +1433,14 @@ def main() -> int:
             eprint(str(exc))
         return 1
 
-    write_session_id(repo_root, result.session_id)
+    updated_agent = replace(
+        agent,
+        session_id=result.session_id,
+        model=agent.model or model,
+        reasoning_effort=agent.reasoning_effort or reasoning_effort,
+        updated_at=iso_now(),
+    )
+    persist_agents_for_command(repo_root, agents, updated_agent)
     try_promote_exec_session_to_cli(result.session_id)
 
     if init_mode is not None:
@@ -1212,6 +1468,8 @@ def main() -> int:
             eprint(str(exc))
             return 1
 
+    if migration_notice:
+        eprint(migration_notice)
     sys.stdout.write(result.reply.rstrip() + "\n")
     return 0
 

@@ -2,7 +2,9 @@
 
 Use this as the collaboration bootstrap entrypoint.
 
-Session continuity is wrapper-managed. Claude must use the wrapper commands and must not call raw `codex` directly or manually edit/delete `<repo>/.claude/codex_session.json`.
+Session continuity is wrapper-managed. Claude must use the wrapper commands and must not call raw `codex` directly or manually edit/delete `<repo>/.claude/codex_agents.json`.
+
+`init` may target a specific managed agent with `--agent <name>`. If that agent does not exist yet, the wrapper creates it automatically and persists it in the array-based config.
 
 Claude should call `init` in three cases:
 
@@ -12,7 +14,7 @@ Claude should call `init` in three cases:
 
 `init` is not a mutation step and not a discussion turn. It exists to give Codex the collaboration protocol plus either the new-task background or the tentative recovery background.
 
-`init` is only the collaboration bootstrap. Session creation or resume happens automatically inside the wrapper before `init` runs.
+`init` is only the collaboration bootstrap. Session creation or resume for the selected agent happens automatically inside the wrapper before `init` runs.
 
 ## Input contract
 
@@ -77,4 +79,10 @@ If Codex does not have trustworthy prior context to add, it should say so plainl
 
 ```bash
 <skill_root>/bin/codex-skill-init < init.json
+```
+
+Named agent example:
+
+```bash
+<skill_root>/bin/codex-skill-init --agent reviewer-a < init.json
 ```
