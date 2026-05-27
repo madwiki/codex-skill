@@ -40,10 +40,14 @@ git clone https://github.com/madwiki/codex-skill ~/.claude/skills/codex-skill
 - `claude.*` is Claude-side guidance: it is returned to Claude in wrapper output, not injected into Codex prompts
 - `shared_stages` and `work_modes.*.stages` are common stage guidance: they are injected on both sides
 - `agents[*].*` is agent-side guidance: it is injected only into the targeted Codex agent prompt
+- Wrapper-injected system guidance is labeled `Codex Skill Reminder`
+- User/Claude-configured guidance is labeled `User Reminder`
+- `init` always carries full reminders; ongoing per-agent turns follow a 3-turn cadence: full on 1/4/7/... and brief on the two turns in between
 - Supports unified file references in injected text with the format `[[REF:<relative-path>]]` or `[[REF:<relative-path>::<locator>]]`
 - When a prompt contains `[[REF:...]]`, the wrapper injects a reference notice plus a referenced-materials list; referenced files must exist inside the workspace root
 - Prefer direct narrative text for short or medium guidance. Use `[[REF:...]]` only when the underlying material is large enough that repeating it every turn would waste context.
 - `.claude/codex-skill-refs/` is the conventional place for long Codex Skill reference documents, but the unified `[[REF:...]]` format may point at any workspace file
+- User escalation is reserved for a real unresolved Claude/Codex disagreement that has persisted for about 10 turns on the same issue
 - Requires a persistence bootstrap on skill load: verify durable memory/`CLAUDE.md` contains the reload + init + subtask-guide rule, and add it if missing
 - Uses `init` as the bootstrap entrypoint for a new shared task, after Claude returns from compact or context clear, or when mutation ownership reverses between Claude and Codex
 - Requires `init` to declare the current mutation-owner path explicitly through `mutation_owner: "claude"` or `mutation_owner: "codex"`

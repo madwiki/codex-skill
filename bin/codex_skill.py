@@ -179,6 +179,7 @@ class AgentConfig:
     model: Optional[str]
     reasoning_effort: Optional[str]
     previous_session_ids: tuple[str, ...]
+    reminder_turn_count: int
     updated_at: str
 
 
@@ -261,6 +262,7 @@ def build_agent_config(
     model: Optional[str] = None,
     reasoning_effort: Optional[str] = None,
     previous_session_ids: tuple[str, ...] = (),
+    reminder_turn_count: int = 0,
 ) -> AgentConfig:
     normalized_name = normalize_optional_string(name)
     if not normalized_name:
@@ -279,6 +281,7 @@ def build_agent_config(
         model=normalize_optional_string(model),
         reasoning_effort=normalize_optional_string(reasoning_effort),
         previous_session_ids=normalize_previous_session_ids(list(previous_session_ids)),
+        reminder_turn_count=max(0, int(reminder_turn_count)),
         updated_at=iso_now(),
     )
 
@@ -302,6 +305,7 @@ def parse_agent_config(obj: object) -> AgentConfig:
         model=normalize_optional_string(obj.get("model")),
         reasoning_effort=normalize_optional_string(obj.get("reasoning_effort")),
         previous_session_ids=normalize_previous_session_ids(obj.get("previous_session_ids")),
+        reminder_turn_count=max(0, int(obj.get("reminder_turn_count", 0) or 0)),
         updated_at=updated_at,
     )
 
@@ -318,6 +322,7 @@ def agent_config_to_json(agent: AgentConfig) -> dict[str, object]:
         "model": agent.model,
         "reasoning_effort": agent.reasoning_effort,
         "previous_session_ids": list(agent.previous_session_ids),
+        "reminder_turn_count": agent.reminder_turn_count,
         "updated_at": agent.updated_at,
     }
 
@@ -1229,75 +1234,191 @@ def build_reference_notice(repo_root: Path, texts: list[str]) -> list[str]:
     return ["\n".join(lines)]
 
 
-def build_common_stage_sections(
+def render_named_items(items: list[tuple[str, str]]) -> str:
+    return "\n\n".join(f"### {title}\n\n{body}" for title, body in items).strip()
+
+
+def build_brief_user_reminder(label: str, items: list[tuple[str, str]], stage_name: str) -> str:
+    if not items:
+        return ""
+    active = ", ".join(title for title, _body in items)
+    return (
+        f"The configured {label} still applies.\n"
+        f"Current stage: {stage_name}.\n"
+        f"Active reminder fields: {active}.\n"
+        "Do not drift from that configured reminder just because the full text is omitted in this turn."
+    )
+
+
+def build_codex_skill_reminder_text_for_codex(
+    tool: str,
+    *,
+    full: bool,
+    prompt_text: str,
+) -> str:
+    if full or tool == "init":
+        return prompt_text.strip()
+
+    brief_map = {
+        "chat": (
+            "Persistent collaboration turn with Claude, not the end user. "
+            "Discussion only; no mutation and no gate verdict. "
+            "Compare evidence, surface disagreement clearly, and only ask Claude to escalate to the user "
+            "if a real unresolved Claude/Codex disagreement has persisted for about 10 turns."
+        ),
+        "review-my-plan": (
+            "Claude-mutates hard gate. Review the plan before mutation, do not mutate, and judge from facts and whole-system coherence. "
+            "The first non-empty line must be approved_to_mutate: true or approved_to_mutate: false, followed by ## Plan Review Reply. "
+            "Do not ask for user input unless a real unresolved Claude/Codex disagreement has persisted for about 10 turns."
+        ),
+        "review-my-work": (
+            "Claude-mutates hard gate. Review the actual work, not intent; do not mutate. "
+            "The first non-empty line must be approved_work: true or approved_work: false, followed by ## Work Review Reply. "
+            "Do not ask for user input unless a real unresolved Claude/Codex disagreement has persisted for about 10 turns."
+        ),
+        "work-sync": (
+            "Codex-mutates sync turn only. Discussion, disagreement handling, candidate plan formation, or response to Claude review are allowed; mutation is not. "
+            "Return ## Discussion Reply, and add ## Plan only when a candidate plan is genuinely ready. "
+            "Do not ask for user input unless a real unresolved Claude/Codex disagreement has persisted for about 10 turns."
+        ),
+        "request-mutation": (
+            "Codex-mutates mutation turn. Perform only the approved step, do not widen scope, then stop and report what changed, what you verified, what concerns remain, and where you stopped. "
+            "Do not ask the user directly."
+        ),
+    }
+    return brief_map.get(tool, prompt_text.strip())
+
+
+def build_codex_skill_reminder_text_for_claude(tool: str, *, full: bool) -> str:
+    full_map = {
+        "init": (
+            "Run init on every new shared task, after compact/context clear, and whenever mutation ownership reverses. "
+            "Init is collaboration bootstrap only. It is not session management, not discussion, and not mutation."
+        ),
+        "chat": (
+            "This is Claude-mutates discussion only. Do not treat chat as plan approval or mutation permission. "
+            "Keep pushing for real consensus, and do not stop for user input unless a real unresolved Claude/Codex disagreement has persisted for about 10 turns."
+        ),
+        "review-my-plan": (
+            "This is the Claude-mutates hard gate before Claude mutates. Submit a concrete plan, require direct fact-checking, and do not treat mere discussion as approval. "
+            "Do not ask the user just because execution feels uncertain; escalate only when a real unresolved Claude/Codex disagreement has persisted for about 10 turns."
+        ),
+        "review-my-work": (
+            "This is the Claude-mutates hard gate before delivery. Review actual work, evidence, and coherence. "
+            "Do not ask the user just because next execution steps are undecided; escalate only when a real unresolved Claude/Codex disagreement has persisted for about 10 turns."
+        ),
+        "work-sync": (
+            "This is the Codex-mutates non-mutation sync turn. Use it for discussion, disagreement, candidate plans, and response to review. "
+            "It is not mutation permission. Escalate to the user only for a real unresolved Claude/Codex disagreement that has persisted for about 10 turns."
+        ),
+        "request-mutation": (
+            "This is the only Codex-mutates mutation permission turn. Approve exactly one concrete step, then expect Codex to stop and report back. "
+            "Do not ask the user about whether to continue execution unless a real unresolved Claude/Codex disagreement has persisted for about 10 turns."
+        ),
+        "configure": (
+            "This command only updates the managed Codex Skill configuration. It does not mutate task files and it does not replace session continuity by itself."
+        ),
+        "dangerous-new-session": (
+            "This command is for destructive continuity replacement. Use it only when the user explicitly authorizes abandoning or switching the managed session continuity."
+        ),
+    }
+    brief_map = {
+        "init": "Init re-establishes the collaboration baseline. Use full reminders here.",
+        "chat": "Discussion only. No approval. Full Codex Skill reminder still applies. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
+        "review-my-plan": "Hard gate before mutation. Full Codex Skill reminder still applies. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
+        "review-my-work": "Hard gate before delivery. Full Codex Skill reminder still applies. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
+        "work-sync": "Sync only. No mutation permission. Full Codex Skill reminder still applies. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
+        "request-mutation": "Single approved mutation step only. Full Codex Skill reminder still applies.",
+        "configure": "Config update only. Full Codex Skill reminder still applies.",
+        "dangerous-new-session": "Destructive continuity replacement. Full Codex Skill reminder still applies.",
+    }
+    return (full_map if full else brief_map).get(tool, "")
+
+
+def collaborative_turn_index(tool: str, agent: AgentConfig) -> int:
+    if tool == "init":
+        return 0
+    if tool in {"chat", "review-my-plan", "review-my-work", "work-sync", "request-mutation"}:
+        return agent.reminder_turn_count + 1
+    return 0
+
+
+def should_use_full_reminder(tool: str, turn_index: int) -> bool:
+    if tool in {"init", "configure", "dangerous-new-session"}:
+        return True
+    if turn_index <= 0:
+        return True
+    return (turn_index - 1) % 3 == 0
+
+
+def build_common_stage_items(
     config: SkillConfig,
     *,
     tool: str,
-) -> list[str]:
-    sections: list[str] = []
+) -> list[tuple[str, str]]:
+    items: list[tuple[str, str]] = []
     stage_name = tool
     mode_name = infer_mode_name(tool)
 
     shared_stage_text = config.shared_stages.get(stage_name)
     if shared_stage_text:
-        sections.append("## Shared Stage Guidance\n\n" + shared_stage_text)
+        items.append(("Shared Stage Guidance", shared_stage_text))
 
     if mode_name is not None:
         mode_config = config.work_modes.get(mode_name)
         if mode_config is not None:
             mode_stage_text = mode_config.stages.get(stage_name)
             if mode_stage_text:
-                sections.append("## Workflow Stage Guidance\n\n" + mode_stage_text)
+                items.append(("Workflow Stage Guidance", mode_stage_text))
 
-    return sections
+    return items
 
 
-def build_claude_context_sections(
+def build_claude_user_items(
     config: SkillConfig,
     *,
     tool: str,
-) -> list[str]:
-    sections: list[str] = []
+) -> list[tuple[str, str]]:
+    items: list[tuple[str, str]] = []
     stage_name = tool
 
     if config.claude.baseline:
-        sections.append("## Claude Baseline\n\n" + config.claude.baseline)
+        items.append(("Claude Baseline", config.claude.baseline))
     if config.claude.working_style:
-        sections.append("## Claude Working Style\n\n" + config.claude.working_style)
+        items.append(("Claude Working Style", config.claude.working_style))
     if config.claude.extra_context:
-        sections.append("## Claude Extra Context\n\n" + config.claude.extra_context)
+        items.append(("Claude Extra Context", config.claude.extra_context))
 
     claude_stage_text = config.claude.stage_guidance.get(stage_name)
     if claude_stage_text:
-        sections.append("## Claude Stage Guidance\n\n" + claude_stage_text)
+        items.append(("Claude Stage Guidance", claude_stage_text))
 
-    sections.extend(build_common_stage_sections(config, tool=tool))
-    return sections
+    return items
 
 
-def build_agent_context_sections(
+def build_agent_user_items(
     config: SkillConfig,
     agent: AgentConfig,
     *,
     tool: str,
-) -> list[str]:
+) -> list[tuple[str, str]]:
     stage_name = tool
-    sections = build_common_stage_sections(config, tool=tool)
+    items: list[tuple[str, str]] = []
 
     if agent.description and agent.description != default_agent_description(agent.name):
-        sections.append("## Agent Description\n\n" + agent.description)
+        items.append(("Agent Description", agent.description))
     if agent.focus:
-        sections.append("## Agent Focus\n\n" + agent.focus)
+        items.append(("Agent Focus", agent.focus))
     if agent.baseline:
-        sections.append("## Agent Baseline\n\n" + agent.baseline)
+        items.append(("Agent Baseline", agent.baseline))
     if agent.extra_context:
-        sections.append("## Agent Extra Context\n\n" + agent.extra_context)
+        items.append(("Agent Extra Context", agent.extra_context))
 
     agent_stage_text = agent.stage_guidance.get(stage_name)
     if agent_stage_text:
-        sections.append("## Agent Stage Guidance\n\n" + agent_stage_text)
+        items.append(("Agent Stage Guidance", agent_stage_text))
 
-    return sections
+    return items
 
 
 def compose_prompt(
@@ -1306,13 +1427,43 @@ def compose_prompt(
     agent: AgentConfig,
     *,
     tool: str,
+    full_reminder: bool,
     base_parts: list[str],
 ) -> str:
     if not base_parts:
         raise RuntimeError("compose_prompt requires at least one base part.")
-    context_sections = build_agent_context_sections(config, agent, tool=tool)
-    ref_notice_sections = build_reference_notice(repo_root, context_sections + base_parts[1:])
-    prompt_parts = [base_parts[0], *ref_notice_sections, *context_sections, *base_parts[1:]]
+    common_items = build_common_stage_items(config, tool=tool)
+    agent_items = build_agent_user_items(config, agent, tool=tool)
+    skill_reminder = build_codex_skill_reminder_text_for_codex(
+        tool,
+        full=full_reminder,
+        prompt_text=base_parts[0],
+    )
+    skill_body_parts = [skill_reminder]
+    common_body = render_named_items(common_items)
+    if common_body:
+        skill_body_parts.append(common_body)
+    skill_block = "## Codex Skill Reminder ({})\n\n{}".format(
+        "Full" if full_reminder else "Brief",
+        "\n\n".join(part for part in skill_body_parts if part).strip(),
+    )
+
+    if full_reminder:
+        user_body = render_named_items(agent_items)
+    else:
+        user_body = build_brief_user_reminder("User Reminder", agent_items, tool)
+    user_block = ""
+    if user_body:
+        user_block = "## User Reminder ({})\n\n{}".format(
+            "Full" if full_reminder else "Brief",
+            user_body,
+        )
+
+    ref_notice_sections = build_reference_notice(repo_root, [skill_block, user_block, *base_parts[1:]])
+    prompt_parts = [skill_block, *ref_notice_sections]
+    if user_block:
+        prompt_parts.append(user_block)
+    prompt_parts.extend(base_parts[1:])
     return "\n\n".join(part for part in prompt_parts if part).strip() + "\n"
 
 
@@ -1321,27 +1472,54 @@ def format_output_for_claude(
     config: SkillConfig,
     *,
     tool: str,
+    full_reminder: bool,
     reply: str,
     migration_notice: Optional[str],
 ) -> str:
     normalized_reply = reply.rstrip()
-    claude_sections = build_claude_context_sections(config, tool=tool)
-    ref_notice_sections = build_reference_notice(repo_root, claude_sections)
+    common_items = build_common_stage_items(config, tool=tool)
+    claude_items = build_claude_user_items(config, tool=tool)
+    skill_body_parts = [build_codex_skill_reminder_text_for_claude(tool, full=full_reminder)]
+    common_body = render_named_items(common_items)
+    if common_body:
+        skill_body_parts.append(common_body)
+    skill_block = "## Codex Skill Reminder ({})\n\n{}".format(
+        "Full" if full_reminder else "Brief",
+        "\n\n".join(part for part in skill_body_parts if part).strip(),
+    )
 
-    if not claude_sections and not ref_notice_sections:
+    if full_reminder:
+        user_body = render_named_items(claude_items)
+    else:
+        user_body = build_brief_user_reminder("User Reminder", claude_items, tool)
+    user_block = ""
+    if user_body:
+        user_block = "## User Reminder ({})\n\n{}".format(
+            "Full" if full_reminder else "Brief",
+            user_body,
+        )
+
+    ref_notice_sections = build_reference_notice(repo_root, [skill_block, user_block])
+
+    if not skill_block and not user_block and not ref_notice_sections:
         return append_migration_notice(normalized_reply, migration_notice)
 
     parts = [
-        "## Codex Skill System Reminder For Claude",
+        skill_block,
         *ref_notice_sections,
-        *claude_sections,
+        user_block,
         "## Codex Reply",
         normalized_reply,
     ]
     return append_migration_notice("\n\n".join(part for part in parts if part), migration_notice)
 
 
-def build_init_prompt(repo_root: Path, config: SkillConfig, agent: AgentConfig, stdin_text: str) -> tuple[str, str]:
+def build_init_prompt(
+    repo_root: Path,
+    config: SkillConfig,
+    agent: AgentConfig,
+    stdin_text: str,
+) -> tuple[str, str]:
     payload = parse_init_payload(stdin_text)
     if payload.mode == "task":
         prompt_name = (
@@ -1363,6 +1541,7 @@ def build_init_prompt(repo_root: Path, config: SkillConfig, agent: AgentConfig, 
         config,
         agent,
         tool="init",
+        full_reminder=True,
         base_parts=[
             load_prompt_asset(prompt_name),
             label,
@@ -1373,7 +1552,14 @@ def build_init_prompt(repo_root: Path, config: SkillConfig, agent: AgentConfig, 
     return prompt, payload.mode
 
 
-def build_review_my_plan_prompt(repo_root: Path, config: SkillConfig, agent: AgentConfig, stdin_text: str) -> str:
+def build_review_my_plan_prompt(
+    repo_root: Path,
+    config: SkillConfig,
+    agent: AgentConfig,
+    stdin_text: str,
+    *,
+    full_reminder: bool,
+) -> str:
     payload = parse_review_my_plan_payload(stdin_text)
     parts = [
         load_prompt_asset("review-my-plan.md"),
@@ -1399,10 +1585,24 @@ def build_review_my_plan_prompt(repo_root: Path, config: SkillConfig, agent: Age
             ]
         )
 
-    return compose_prompt(repo_root, config, agent, tool="review-my-plan", base_parts=parts)
+    return compose_prompt(
+        repo_root,
+        config,
+        agent,
+        tool="review-my-plan",
+        full_reminder=full_reminder,
+        base_parts=parts,
+    )
 
 
-def build_chat_prompt(repo_root: Path, config: SkillConfig, agent: AgentConfig, stdin_text: str) -> str:
+def build_chat_prompt(
+    repo_root: Path,
+    config: SkillConfig,
+    agent: AgentConfig,
+    stdin_text: str,
+    *,
+    full_reminder: bool,
+) -> str:
     payload = parse_chat_payload(stdin_text)
     parts = [
         load_prompt_asset("chat.md"),
@@ -1420,10 +1620,24 @@ def build_chat_prompt(repo_root: Path, config: SkillConfig, agent: AgentConfig, 
             ]
         )
 
-    return compose_prompt(repo_root, config, agent, tool="chat", base_parts=parts)
+    return compose_prompt(
+        repo_root,
+        config,
+        agent,
+        tool="chat",
+        full_reminder=full_reminder,
+        base_parts=parts,
+    )
 
 
-def build_review_my_work_prompt(repo_root: Path, config: SkillConfig, agent: AgentConfig, stdin_text: str) -> str:
+def build_review_my_work_prompt(
+    repo_root: Path,
+    config: SkillConfig,
+    agent: AgentConfig,
+    stdin_text: str,
+    *,
+    full_reminder: bool,
+) -> str:
     payload = parse_review_my_work_payload(stdin_text)
     parts = [
         load_prompt_asset("review-my-work.md"),
@@ -1449,10 +1663,24 @@ def build_review_my_work_prompt(repo_root: Path, config: SkillConfig, agent: Age
             ]
         )
 
-    return compose_prompt(repo_root, config, agent, tool="review-my-work", base_parts=parts)
+    return compose_prompt(
+        repo_root,
+        config,
+        agent,
+        tool="review-my-work",
+        full_reminder=full_reminder,
+        base_parts=parts,
+    )
 
 
-def build_work_sync_prompt(repo_root: Path, config: SkillConfig, agent: AgentConfig, stdin_text: str) -> str:
+def build_work_sync_prompt(
+    repo_root: Path,
+    config: SkillConfig,
+    agent: AgentConfig,
+    stdin_text: str,
+    *,
+    full_reminder: bool,
+) -> str:
     payload = parse_work_sync_payload(stdin_text)
     parts = [
         load_prompt_asset("work-sync.md"),
@@ -1470,10 +1698,24 @@ def build_work_sync_prompt(repo_root: Path, config: SkillConfig, agent: AgentCon
             ]
         )
 
-    return compose_prompt(repo_root, config, agent, tool="work-sync", base_parts=parts)
+    return compose_prompt(
+        repo_root,
+        config,
+        agent,
+        tool="work-sync",
+        full_reminder=full_reminder,
+        base_parts=parts,
+    )
 
 
-def build_request_mutation_prompt(repo_root: Path, config: SkillConfig, agent: AgentConfig, stdin_text: str) -> str:
+def build_request_mutation_prompt(
+    repo_root: Path,
+    config: SkillConfig,
+    agent: AgentConfig,
+    stdin_text: str,
+    *,
+    full_reminder: bool,
+) -> str:
     payload = parse_request_mutation_payload(stdin_text)
     sandbox_note = (
         "Execution sandbox for this turn: workspace-write (default mutation sandbox)."
@@ -1497,7 +1739,14 @@ def build_request_mutation_prompt(repo_root: Path, config: SkillConfig, agent: A
             ]
         )
 
-    return compose_prompt(repo_root, config, agent, tool="request-mutation", base_parts=parts)
+    return compose_prompt(
+        repo_root,
+        config,
+        agent,
+        tool="request-mutation",
+        full_reminder=full_reminder,
+        base_parts=parts,
+    )
 
 
 def resolve_codex_exec_sandbox(cmd: str, stdin_text: str) -> str:
@@ -1587,20 +1836,46 @@ def build_prompt(
     agent: AgentConfig,
     tool: str,
     stdin_text: str,
+    *,
+    full_reminder: bool,
 ) -> str:
     if tool == "init":
         prompt, _mode = build_init_prompt(repo_root, config, agent, stdin_text)
         return prompt
     if tool == "chat":
-        return build_chat_prompt(repo_root, config, agent, stdin_text)
+        return build_chat_prompt(repo_root, config, agent, stdin_text, full_reminder=full_reminder)
     if tool == "review-my-plan":
-        return build_review_my_plan_prompt(repo_root, config, agent, stdin_text)
+        return build_review_my_plan_prompt(
+            repo_root,
+            config,
+            agent,
+            stdin_text,
+            full_reminder=full_reminder,
+        )
     if tool == "review-my-work":
-        return build_review_my_work_prompt(repo_root, config, agent, stdin_text)
+        return build_review_my_work_prompt(
+            repo_root,
+            config,
+            agent,
+            stdin_text,
+            full_reminder=full_reminder,
+        )
     if tool == "work-sync":
-        return build_work_sync_prompt(repo_root, config, agent, stdin_text)
+        return build_work_sync_prompt(
+            repo_root,
+            config,
+            agent,
+            stdin_text,
+            full_reminder=full_reminder,
+        )
     if tool == "request-mutation":
-        return build_request_mutation_prompt(repo_root, config, agent, stdin_text)
+        return build_request_mutation_prompt(
+            repo_root,
+            config,
+            agent,
+            stdin_text,
+            full_reminder=full_reminder,
+        )
     raise ValueError(f"Unsupported tool: {tool}")
 
 
@@ -1987,6 +2262,7 @@ def main() -> int:
                 repo_root,
                 updated_config,
                 tool="configure",
+                full_reminder=True,
                 reply="\n".join(lines),
                 migration_notice=migration_notice,
             )
@@ -2050,6 +2326,7 @@ def main() -> int:
                 model=effective_model,
                 reasoning_effort=effective_reasoning_effort,
                 previous_session_ids=previous_session_ids,
+                reminder_turn_count=0,
             )
             persist_agents_for_command(repo_root, config, updated_agent)
         except Exception as exc:
@@ -2079,6 +2356,7 @@ def main() -> int:
                 repo_root,
                 updated_config,
                 tool="dangerous-new-session",
+                full_reminder=True,
                 reply="\n".join(lines),
                 migration_notice=migration_notice,
             )
@@ -2100,12 +2378,21 @@ def main() -> int:
     model = args.model or agent.model or DEFAULT_MODEL
     reasoning_effort = args.reasoning_effort or agent.reasoning_effort or DEFAULT_REASONING_EFFORT
     init_mode: Optional[str] = None
+    turn_index = collaborative_turn_index(args.cmd, agent)
+    full_reminder = should_use_full_reminder(args.cmd, turn_index)
 
     try:
         if args.cmd == "init":
             prompt, init_mode = build_init_prompt(repo_root, config, agent, stdin_text)
         else:
-            prompt = build_prompt(repo_root, config, agent, args.cmd, stdin_text)
+            prompt = build_prompt(
+                repo_root,
+                config,
+                agent,
+                args.cmd,
+                stdin_text,
+                full_reminder=full_reminder,
+            )
         sandbox_mode = resolve_codex_exec_sandbox(args.cmd, stdin_text)
         result = run_codex(
             repo_root=repo_root,
@@ -2139,6 +2426,13 @@ def main() -> int:
         session_id=result.session_id,
         model=agent.model or model,
         reasoning_effort=agent.reasoning_effort or reasoning_effort,
+        reminder_turn_count=(
+            0
+            if args.cmd == "init"
+            else agent.reminder_turn_count + 1
+            if args.cmd in {"chat", "review-my-plan", "review-my-work", "work-sync", "request-mutation"}
+            else agent.reminder_turn_count
+        ),
         updated_at=iso_now(),
     )
     persist_agents_for_command(repo_root, config, updated_agent)
@@ -2174,6 +2468,7 @@ def main() -> int:
             repo_root,
             config,
             tool=args.cmd,
+            full_reminder=full_reminder if args.cmd != "init" else True,
             reply=result.reply,
             migration_notice=migration_notice,
         )

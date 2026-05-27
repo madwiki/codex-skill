@@ -29,6 +29,9 @@ Injection boundaries are strict:
 - `claude.*` is Claude-side guidance. It is returned to Claude in wrapper output and is not injected into Codex prompts.
 - `shared_stages` and `work_modes.*.stages` are common stage guidance. They may be shown on both sides.
 - `agents[*].*` is agent-side guidance. It is injected only into the currently targeted Codex agent prompt.
+- Wrapper-injected system guidance is labeled `Codex Skill Reminder`.
+- User/Claude-configured guidance is labeled `User Reminder`.
+- `init` always carries full reminders. Normal ongoing turns use a 3-turn cadence per agent: full reminder on turns 1, 4, 7, ... and brief reminder on the two turns in between.
 
 If the workspace still has the legacy single-session files (`codex_session.json` and optional `codex_session_history.json`), the wrapper auto-migrates them once into `codex_agents.json`, continues from the migrated `default` agent, and surfaces a migration notice in that command's output so Claude knows the storage model changed.
 
@@ -100,7 +103,9 @@ Do not repeat durable background in every call. In normal ongoing work, Codex sh
 - If either agent believes the other is wrong, it should try to persuade with evidence and concrete reasoning. Do not concede just to move the workflow forward.
 - If Codex proposes a plan on the Codex-mutates path and Claude disagrees, use `work-sync.md`. Do not proceed to mutation until real consensus is reached or the user decides.
 - Consensus means both agents can defend the same next action from evidence. It is not a procedural compromise made only to move forward.
-- If consensus cannot be reached, or both agents are unsure, Claude asks the user. Either agent may request escalation, but Claude performs the user-facing question. Present the smallest useful set of options, risks, and a recommendation when one is defensible.
+- Do not ask the user merely because the next execution step is unclear.
+- Ask the user only when there is a real unresolved Claude/Codex disagreement and it has persisted for about 10 turns on the same issue.
+- Either agent may request escalation, but Claude performs the user-facing question. Present the smallest useful set of options, risks, and a recommendation when one is defensible.
 
 ## Choose the workflow
 

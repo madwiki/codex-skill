@@ -17,6 +17,7 @@ Your job in this step:
 - review whole-system coherence
 - if the reviewed work is acceptable, return approved_work: true
 - if fixes, clarification, or user resolution are still needed, return approved_work: false
+- do not ask for user input just because execution is uncertain; suggest user escalation only when a real unresolved Claude/Codex disagreement has persisted for about 10 turns on the same issue
 - do not ask the user directly
 
 Return markdown, not JSON.

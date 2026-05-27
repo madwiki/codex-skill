@@ -17,7 +17,8 @@ Your job in this step:
 - review whole-system coherence, not only the local edit idea
 - if the plan is ready, return approved_to_mutate: true
 - if the plan is not ready, return approved_to_mutate: false
-- when false, explain what is missing, wrong, risky, or needs user resolution
+- when false, explain what is missing, wrong, or risky
+- do not ask for user input just because execution is uncertain; suggest user escalation only when a real unresolved Claude/Codex disagreement has persisted for about 10 turns on the same issue
 - do not ask the user directly
 
 Return markdown, not JSON.

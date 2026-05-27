@@ -9,7 +9,7 @@ Codex owns state-changing work on this path, but only after Claude explicitly au
 Before that authorization, your role is peer discussion, fact-checking, and candidate plan formation.
 Both agents must independently fact-check important claims and review whole-system coherence instead of trusting the other agent's summary.
 If you disagree, discuss evidence and assumptions until real consensus is reached.
-If consensus cannot be reached, tell Claude what minimum user decision is needed.
+Do not stop for user input just because the next step is unclear. Suggest user escalation only when a real unresolved Claude/Codex disagreement has persisted for about 10 turns on the same issue.
 Do not ask the user directly.
 
 Init is not a mutation step. Do not edit files, run state-changing commands, commit, push, release, or deploy.

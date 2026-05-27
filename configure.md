@@ -26,6 +26,9 @@ Ownership boundaries:
 - `claude.*` is Claude-side guidance. It is returned to Claude in wrapper output and is not injected into Codex prompts.
 - `shared_stages` and `work_modes.*.stages` are common stage guidance. They may be shown on both sides.
 - `agents[*].*` is agent-side guidance. It is injected only into the currently targeted Codex agent prompt.
+- Wrapper-injected system guidance is labeled `Codex Skill Reminder`.
+- User/Claude-configured guidance is labeled `User Reminder`.
+- `init` always carries the full reminder text. Normal ongoing turns use a per-agent 3-turn cadence: full reminder on turns 1, 4, 7, ... and a brief reminder on the two turns in between.
 
 ## Input contract
 

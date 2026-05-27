@@ -78,6 +78,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         model: Optional[str] = None,
         reasoning_effort: Optional[str] = None,
         previous_session_ids: Optional[list[str]] = None,
+        reminder_turn_count: int = 0,
     ) -> dict:
         return {
             "name": name,
@@ -90,6 +91,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
             "model": model,
             "reasoning_effort": reasoning_effort,
             "previous_session_ids": previous_session_ids or [],
+            "reminder_turn_count": reminder_turn_count,
             "updated_at": "2026-05-26T00:00:00Z",
         }
 
@@ -373,10 +375,12 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         assert capture is not None
+        self.assertIn("## Codex Skill Reminder (Full)", capture["stdin"])
+        self.assertIn("## User Reminder (Full)", capture["stdin"])
         self.assertIn("## Reference Handling Notice", capture["stdin"])
         self.assertIn("[[REF:.claude/codex-skill-refs/rules.md::Rule 5]]", capture["stdin"])
-        self.assertIn("## Agent Focus", capture["stdin"])
-        self.assertIn("## Agent Stage Guidance", capture["stdin"])
+        self.assertIn("### Agent Focus", capture["stdin"])
+        self.assertIn("### Agent Stage Guidance", capture["stdin"])
 
     def test_claude_side_guidance_is_not_sent_to_codex_but_is_returned_to_claude(self) -> None:
         initial_config = self.build_config(
@@ -419,15 +423,52 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         self.assertNotIn("## Claude Baseline", capture["stdin"])
         self.assertNotIn("## Claude Working Style", capture["stdin"])
         self.assertNotIn("## Claude Stage Guidance", capture["stdin"])
-        self.assertIn("## Shared Stage Guidance", capture["stdin"])
-        self.assertIn("## Workflow Stage Guidance", capture["stdin"])
-        self.assertIn("## Codex Skill System Reminder For Claude", proc.stdout)
-        self.assertIn("## Claude Baseline", proc.stdout)
-        self.assertIn("## Claude Working Style", proc.stdout)
-        self.assertIn("## Claude Stage Guidance", proc.stdout)
-        self.assertIn("## Shared Stage Guidance", proc.stdout)
-        self.assertIn("## Workflow Stage Guidance", proc.stdout)
+        self.assertIn("### Shared Stage Guidance", capture["stdin"])
+        self.assertIn("### Workflow Stage Guidance", capture["stdin"])
+        self.assertIn("## Codex Skill Reminder (Full)", proc.stdout)
+        self.assertIn("## User Reminder (Full)", proc.stdout)
+        self.assertIn("### Claude Baseline", proc.stdout)
+        self.assertIn("### Claude Working Style", proc.stdout)
+        self.assertIn("### Claude Stage Guidance", proc.stdout)
+        self.assertIn("### Shared Stage Guidance", proc.stdout)
+        self.assertIn("### Workflow Stage Guidance", proc.stdout)
         self.assertIn("## Codex Reply", proc.stdout)
+
+    def test_non_init_turns_use_full_then_brief_reminder_cadence(self) -> None:
+        initial_config = self.build_config(
+            [
+                self.build_agent(
+                    "default",
+                    session_id="existing-session",
+                    focus="Watch for architectural drift.",
+                    baseline="Keep the original requirements stable.",
+                    reminder_turn_count=1,
+                )
+            ],
+            claude={
+                "baseline": "Claude baseline text.",
+                "working_style": "Claude working style.",
+                "extra_context": None,
+                "stage_guidance": {},
+            },
+        )
+        proc, capture, state = self.run_skill(
+            "chat",
+            '{"message_for_codex":"Continue the discussion."}',
+            "Normal discussion reply.",
+            initial_config=initial_config,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        assert capture is not None
+        self.assertIn("## Codex Skill Reminder (Brief)", capture["stdin"])
+        self.assertIn("## User Reminder (Brief)", capture["stdin"])
+        self.assertIn("configured User Reminder still applies".lower(), capture["stdin"].lower())
+        self.assertNotIn("### Agent Focus", capture["stdin"])
+        self.assertIn("## Codex Skill Reminder (Brief)", proc.stdout)
+        self.assertIn("## User Reminder (Brief)", proc.stdout)
+        self.assertNotIn("### Claude Baseline", proc.stdout)
+        agent = self.find_agent(state, "default")
+        self.assertEqual(agent["reminder_turn_count"], 2)
 
     def test_missing_ref_file_fails_the_call(self) -> None:
         proc, _capture, _state = self.run_skill(

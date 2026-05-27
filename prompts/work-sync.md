@@ -17,7 +17,7 @@ Your job in this step:
 - decide whether the work should stay in discussion or whether it is ready for a candidate plan
 - if a plan is ready, include it
 - if a plan is not ready, omit it and continue the discussion
-- if user input is needed, tell Claude what minimum question to ask
+- do not ask for user input just because the next execution step is unclear; suggest user escalation only when a real unresolved Claude/Codex disagreement has persisted for about 10 turns on the same issue
 - do not ask the user directly
 
 Return markdown, not JSON.

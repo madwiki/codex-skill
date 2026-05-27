@@ -18,6 +18,7 @@ Codex owns mutation for this step. Codex should perform only the approved step, 
 - Claude must approve exactly one mutation step in this call.
 - Codex must not continue into the next feature or stage after finishing the approved step.
 - Codex must not commit, push, release, deploy, or perform external-state actions unless this exact call explicitly authorizes that action.
+- Do not stop for user input just because the next execution step is unclear. Escalate to the user only for a real unresolved Claude/Codex disagreement that has persisted for about 10 turns on the same issue.
 - Codex must self-check facts and whole-system coherence before reporting the step complete.
 - After Codex responds, Claude reviews independently by reading/searching/verifying. If more discussion is needed, Claude returns to `work-sync.md`.
 
