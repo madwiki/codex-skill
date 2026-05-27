@@ -119,7 +119,7 @@ The wrapper replies in plain text. It should tell the caller:
 - that the config update was applied
 - which top-level sections were updated
 - which agent names were updated
-- whether a legacy config was migrated during this command
+- whether any legacy config was migrated during this command
 
 ## Run
 

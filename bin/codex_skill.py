@@ -508,7 +508,19 @@ def read_legacy_session_history(repo_root: Path) -> tuple[str, ...]:
     return normalize_previous_session_ids(data.get("previous_session_ids"))
 
 
-def migrate_legacy_agents_config(
+def structured_config_needs_migration(raw_obj: dict[str, object]) -> bool:
+    if "claude" in raw_obj:
+        return True
+    version = raw_obj.get("version")
+    if not isinstance(version, int) or version < CONFIG_VERSION:
+        return True
+    work_modes = raw_obj.get("work_modes")
+    if isinstance(work_modes, dict) and "claude_mutates" in work_modes:
+        return True
+    return False
+
+
+def migrate_agents_config_to_latest(
     repo_root: Path,
     *,
     default_model: Optional[str],
@@ -521,7 +533,21 @@ def migrate_legacy_agents_config(
         except json.JSONDecodeError as exc:
             raise RuntimeError(f"Invalid agent config JSON in {config_path}: {exc.msg}") from exc
         if isinstance(data, dict):
-            return None
+            if not structured_config_needs_migration(data):
+                return None
+            migrated = parse_skill_config_object(data, path=config_path)
+            write_skill_config(
+                repo_root,
+                replace(migrated, version=CONFIG_VERSION, updated_at=iso_now()),
+            )
+            return (
+                "Legacy structured config was migrated to version 3 at "
+                f"{config_path}. Structural keys were normalized automatically "
+                "(for example, legacy caller fields and mode names). User-authored "
+                "reminder text was left unchanged. If you also want old caller-facing "
+                "wording inside those reminder texts updated, have the caller confirm "
+                "that change with the user and then apply it through configure."
+            )
         if isinstance(data, list):
             migrated = default_skill_config([parse_agent_config(item) for item in data])
             write_skill_config(repo_root, migrated)
@@ -1966,7 +1992,7 @@ def resolve_agents_for_command(
     default_model: Optional[str],
     default_reasoning_effort: Optional[str],
 ) -> tuple[SkillConfig, AgentConfig, Optional[str]]:
-    migration_notice = migrate_legacy_agents_config(
+    migration_notice = migrate_agents_config_to_latest(
         repo_root,
         default_model=default_model,
         default_reasoning_effort=default_reasoning_effort,

@@ -43,7 +43,10 @@ All wrapper commands accept optional `--agent <name>` to target a specific manag
 - `init` always carries full reminders.
 - Normal ongoing turns use a 3-turn cadence per agent: full reminder on turns 1, 4, 7, ... and brief reminder on the two turns in between.
 
-If the workspace still has the legacy single-session files (`codex_session.json` and optional `codex_session_history.json`), the wrapper auto-migrates them once into `codex_agents.json`, continues from the migrated `default` agent, and surfaces a migration notice in that command's output so the caller knows the storage model changed.
+If the workspace still has legacy config state, the wrapper auto-migrates it once into the latest `codex_agents.json` format and surfaces a migration notice in that command's output so the caller knows the storage model changed. This includes both:
+
+- legacy single-session files (`codex_session.json` and optional `codex_session_history.json`)
+- older structured configs that still use legacy caller field names or mode names
 
 ## References
 

@@ -275,6 +275,58 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         self.assertEqual(agent["session_id"], "legacy-session")
         self.assertEqual(agent["previous_session_ids"], ["older-session", "oldest-session"])
 
+    def test_legacy_structured_config_is_migrated_to_version_3(self) -> None:
+        legacy_config = {
+            "version": 2,
+            "claude": {
+                "baseline": "Keep the original task stable.",
+                "working_style": "Discuss before mutating.",
+                "extra_context": None,
+                "stage_guidance": {
+                    "review-my-plan": "Require concrete scope."
+                },
+            },
+            "shared_stages": {
+                "chat": "Discussion only."
+            },
+            "work_modes": {
+                "claude_mutates": {
+                    "stages": {
+                        "review-my-plan": "Still a hard gate."
+                    }
+                },
+                "codex_mutates": {
+                    "stages": {}
+                },
+            },
+            "agents": [
+                self.build_agent("default", session_id="legacy-structured-session"),
+            ],
+        }
+        proc, capture, state = self.run_skill(
+            "review-my-plan",
+            '{"plan_for_review":"Review the current plan."}',
+            "approved_to_mutate: true\n\n## Plan Review Reply\n\nLooks acceptable.",
+            initial_config=legacy_config,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        assert capture is not None
+        self.assertIn("resume", capture["argv"])
+        self.assertIn("legacy-structured-session", capture["argv"])
+        self.assertIn("Migration notice:", proc.stdout)
+        self.assertIn("Legacy structured config was migrated to version 3", proc.stdout)
+        self.assertIn("User-authored reminder text was left unchanged.", proc.stdout)
+        payload = state["agents_payload"]
+        assert payload is not None
+        self.assertEqual(payload["version"], 3)
+        self.assertIn("caller", payload)
+        self.assertNotIn("claude", payload)
+        self.assertEqual(payload["caller"]["baseline"], "Keep the original task stable.")
+        self.assertEqual(
+            payload["work_modes"]["caller_mutates"]["stages"]["review-my-plan"],
+            "Still a hard gate.",
+        )
+
     def test_named_agent_is_created_when_selected(self) -> None:
         proc, _capture, state = self.run_skill(
             "init",

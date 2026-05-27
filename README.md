@@ -33,8 +33,8 @@ git clone https://github.com/madwiki/codex-skill ~/.claude/skills/codex-skill
 - Automatically creates a new managed Codex session for the selected agent when that agent does not have one yet
 - Treats session continuity as wrapper-managed: use only `bin/codex-skill-*` commands, never raw `codex`, and never manually edit or delete the managed agent config
 - Uses `dangerous-new-session` only when the user explicitly wants to replace the selected managed Codex agent session, either with a fresh one or with a specific target session id
-- Automatically migrates legacy single-session files (`codex_session.json` / `codex_session_history.json`) into the new structured agent config on first use
-- When that one-time legacy migration happens, the wrapper includes a migration notice in the command output so the caller sees it immediately
+- Automatically migrates both legacy single-session files (`codex_session.json` / `codex_session_history.json`) and older structured configs that still use legacy caller field names or mode names into the latest structured agent config on first use
+- When that one-time migration happens, the wrapper includes a migration notice in the command output so the caller sees it immediately
 - Supports direct multi-agent usage through `--agent <name>`; the default agent name is `default`
 - Supports `configure` to update caller baseline text, shared stage guidance, workflow-stage guidance, and agent-specific focus/baseline text through the skill interface
 - `caller.*` is caller-side guidance: it is returned to the caller in wrapper output, not injected into Codex prompts
