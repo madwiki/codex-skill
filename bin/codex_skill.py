@@ -1305,6 +1305,7 @@ def build_codex_skill_reminder_text_for_claude(tool: str, *, full: bool) -> str:
         ),
         "review-my-work": (
             "This is the Claude-mutates hard gate before delivery. Review actual work, evidence, and coherence. "
+            "approved_work: true accepts only the reviewed step, not automatically the whole larger plan; if more agreed steps remain, continue directly to the next step instead of stopping. "
             "Do not ask the user just because next execution steps are undecided; escalate only when a real unresolved Claude/Codex disagreement has persisted for about 10 turns."
         ),
         "work-sync": (
@@ -1326,7 +1327,7 @@ def build_codex_skill_reminder_text_for_claude(tool: str, *, full: bool) -> str:
         "init": "Init re-establishes the collaboration baseline. Use full reminders here.",
         "chat": "Discussion only. No approval. Full Codex Skill reminder still applies. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
         "review-my-plan": "Hard gate before mutation. Full Codex Skill reminder still applies. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
-        "review-my-work": "Hard gate before delivery. Full Codex Skill reminder still applies. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
+        "review-my-work": "Hard gate before delivery. approved_work: true accepts only the reviewed step; if more agreed steps remain, continue instead of stopping. Full Codex Skill reminder still applies. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
         "work-sync": "Sync only. No mutation permission. Full Codex Skill reminder still applies. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
         "request-mutation": "Single approved mutation step only. Full Codex Skill reminder still applies.",
         "configure": "Config update only. Full Codex Skill reminder still applies.",

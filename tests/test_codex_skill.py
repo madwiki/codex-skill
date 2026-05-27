@@ -470,6 +470,16 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         agent = self.find_agent(state, "default")
         self.assertEqual(agent["reminder_turn_count"], 2)
 
+    def test_review_my_work_reminder_warns_not_to_stop_after_step_pass(self) -> None:
+        proc, _capture, _state = self.run_skill(
+            "review-my-work",
+            '{"work_for_review":"Changed one agreed sub-step and verified the relevant tests."}',
+            "approved_work: true\n\n## Work Review Reply\n\nStep accepted; continue.\n",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("approved_work: true accepts only the reviewed step", proc.stdout)
+        self.assertIn("continue directly to the next step instead of stopping", proc.stdout)
+
     def test_missing_ref_file_fails_the_call(self) -> None:
         proc, _capture, _state = self.run_skill(
             "chat",

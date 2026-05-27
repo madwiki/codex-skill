@@ -16,6 +16,7 @@ Claude owns mutation. Codex reviews Claude's work, may do read-only investigatio
 - Run the persistence bootstrap in `SKILL.md` first: verify durable memory/`CLAUDE.md` contains the reload + init + subtask-guide rule, and add it if missing.
 - For a new shared task, or after compact/context clear, run `init.md` before work review.
 - This call is a hard gate. Claude must not treat the work as accepted until Codex returns `approved_work: true`.
+- `approved_work: true` accepts the reviewed step, not automatically the entire larger plan. If more agreed steps remain, Claude should continue directly to the next agreed step instead of stopping.
 - Include enough evidence for Codex to review independently: changed files, test results, known risks, and unresolved assumptions.
 - Ask Codex to read/search/inspect when needed and to look for holes rather than rubber-stamp the result.
 - Ask Codex to personally fact-check important claims and review whole-system coherence across affected code, tests, docs, prompts, memory, and artifacts.
@@ -76,7 +77,7 @@ Then Codex must include this required section:
 
 Meaning:
 
-- `approved_work: true` means Claude may treat the reviewed work as accepted
+- `approved_work: true` means Claude may treat the reviewed step as accepted; it does not by itself mean the whole larger plan is complete
 - `approved_work: false` means Claude must not treat the work as accepted yet
 - `## Work Review Reply` contains Codex's reasoning, blockers, risks, disagreement, requested fixes, and any minimum user decision if needed
 

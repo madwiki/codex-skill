@@ -16,6 +16,7 @@ Your job in this step:
 - independently fact-check important claims when possible
 - review whole-system coherence
 - if the reviewed work is acceptable, return approved_work: true
+- if the reviewed work is acceptable but the larger agreed plan still has remaining steps, say clearly that this approval is only for the reviewed step and Claude should continue to the next agreed step instead of stopping
 - if fixes, clarification, or user resolution are still needed, return approved_work: false
 - do not ask for user input just because execution is uncertain; suggest user escalation only when a real unresolved Claude/Codex disagreement has persisted for about 10 turns on the same issue
 - do not ask the user directly
