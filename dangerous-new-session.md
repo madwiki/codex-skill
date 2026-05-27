@@ -2,9 +2,9 @@
 
 Use this only when the user explicitly wants to abandon the selected Codex agent continuity and authorize a fresh managed Codex session for that agent slot.
 
-This is a dangerous command by design. Do not use it just because resume failed, the current session looks confusing, or Claude wants a clean slate. Only use it after the user explicitly asks for a fresh start, replacement, reset, switch, or continuity break.
+This is a dangerous command by design. Do not use it just because resume failed, the current session looks confusing, or the caller wants a clean slate. Only use it after the user explicitly asks for a fresh start, replacement, reset, switch, or continuity break.
 
-Claude must not call raw `codex` directly and must not manually edit, delete, or replace `<repo>/.claude/codex_agents.json`.
+The caller must not call raw `codex` directly and must not manually edit, delete, or replace `<repo>/.claude/codex_agents.json`.
 
 This command may target a specific managed agent with `--agent <name>`. When omitted, it operates on the `default` agent.
 
@@ -35,7 +35,7 @@ Rules:
 
 ## Output contract
 
-The wrapper replies in plain text. It should tell Claude:
+The wrapper replies in plain text. It should tell the caller:
 
 - which agent was updated
 - the new current session id

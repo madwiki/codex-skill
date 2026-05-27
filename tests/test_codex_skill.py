@@ -99,13 +99,13 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         self,
         agents: list[dict],
         *,
-        claude: Optional[dict] = None,
+        caller: Optional[dict] = None,
         shared_stages: Optional[dict[str, str]] = None,
         work_modes: Optional[dict] = None,
     ) -> dict:
         return {
             "version": 3,
-            "claude": claude or {
+            "caller": caller or {
                 "baseline": None,
                 "working_style": None,
                 "extra_context": None,
@@ -113,7 +113,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
             },
             "shared_stages": shared_stages or {},
             "work_modes": work_modes or {
-                "claude_mutates": {"stages": {}},
+                "caller_mutates": {"stages": {}},
                 "codex_mutates": {"stages": {}},
             },
             "agents": agents,
@@ -246,7 +246,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
     def test_init_without_agent_config_creates_new_persistent_default_agent(self) -> None:
         proc, capture, state = self.run_skill(
             "init",
-            '{"task_background":"Current task brief","mutation_owner":"claude"}',
+            '{"task_background":"Current task brief","mutation_owner":"caller"}',
             "## Task Understanding Reply\n\nLooks consistent.",
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -290,7 +290,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
     def test_effective_defaults_are_persisted_for_new_agent(self) -> None:
         proc, _capture, state = self.run_skill(
             "init",
-            '{"task_background":"Current task brief","mutation_owner":"claude"}',
+            '{"task_background":"Current task brief","mutation_owner":"caller"}',
             "## Task Understanding Reply\n\nLooks consistent.",
             agent_name="baseline",
             env_extra={
@@ -303,12 +303,12 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         self.assertEqual(agent["model"], "gpt-test")
         self.assertEqual(agent["reasoning_effort"], "high")
 
-    def test_configure_updates_claude_and_agent_fields(self) -> None:
+    def test_configure_updates_caller_and_agent_fields(self) -> None:
         proc, _capture, state = self.run_skill(
             "configure",
             json.dumps(
                 {
-                    "claude": {
+                    "caller": {
                         "baseline": "Keep original requirements stable.",
                         "working_style": "Discuss before mutating.",
                         "stage_guidance": {
@@ -319,7 +319,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
                         "init": "Always re-check continuity assumptions."
                     },
                     "work_modes": {
-                        "claude_mutates": {
+                        "caller_mutates": {
                             "stages": {
                                 "review-my-plan": "This is still a hard gate."
                             }
@@ -345,10 +345,10 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         payload = state["agents_payload"]
         assert payload is not None
-        self.assertEqual(payload["claude"]["baseline"], "Keep original requirements stable.")
+        self.assertEqual(payload["caller"]["baseline"], "Keep original requirements stable.")
         self.assertEqual(payload["shared_stages"]["init"], "Always re-check continuity assumptions.")
         self.assertEqual(
-            payload["work_modes"]["claude_mutates"]["stages"]["review-my-plan"],
+            payload["work_modes"]["caller_mutates"]["stages"]["review-my-plan"],
             "This is still a hard gate.",
         )
         reviewer = self.find_agent(state, "reviewer-a")
@@ -382,7 +382,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         self.assertIn("### Agent Focus", capture["stdin"])
         self.assertIn("### Agent Stage Guidance", capture["stdin"])
 
-    def test_claude_side_guidance_is_not_sent_to_codex_but_is_returned_to_claude(self) -> None:
+    def test_caller_side_guidance_is_not_sent_to_codex_but_is_returned_to_caller(self) -> None:
         initial_config = self.build_config(
             [
                 self.build_agent(
@@ -392,8 +392,8 @@ class CodexSkillIntegrationTests(unittest.TestCase):
                     baseline="Keep the original requirements stable.",
                 )
             ],
-            claude={
-                "baseline": "Claude must keep the original user constraints stable.",
+            caller={
+                "baseline": "The caller must keep the original user constraints stable.",
                 "working_style": "Use Codex Skill, not raw Codex.",
                 "extra_context": None,
                 "stage_guidance": {
@@ -404,7 +404,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
                 "review-my-plan": "This is a shared hard-gate stage."
             },
             work_modes={
-                "claude_mutates": {
+                "caller_mutates": {
                     "stages": {
                         "review-my-plan": "Plan approval is mode-specific here."
                     }
@@ -420,16 +420,16 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         assert capture is not None
-        self.assertNotIn("## Claude Baseline", capture["stdin"])
-        self.assertNotIn("## Claude Working Style", capture["stdin"])
-        self.assertNotIn("## Claude Stage Guidance", capture["stdin"])
+        self.assertNotIn("## Caller Baseline", capture["stdin"])
+        self.assertNotIn("## Caller Working Style", capture["stdin"])
+        self.assertNotIn("## Caller Stage Guidance", capture["stdin"])
         self.assertIn("### Shared Stage Guidance", capture["stdin"])
         self.assertIn("### Workflow Stage Guidance", capture["stdin"])
         self.assertIn("## Codex Skill Reminder (Full)", proc.stdout)
         self.assertIn("## User Reminder (Full)", proc.stdout)
-        self.assertIn("### Claude Baseline", proc.stdout)
-        self.assertIn("### Claude Working Style", proc.stdout)
-        self.assertIn("### Claude Stage Guidance", proc.stdout)
+        self.assertIn("### Caller Baseline", proc.stdout)
+        self.assertIn("### Caller Working Style", proc.stdout)
+        self.assertIn("### Caller Stage Guidance", proc.stdout)
         self.assertIn("### Shared Stage Guidance", proc.stdout)
         self.assertIn("### Workflow Stage Guidance", proc.stdout)
         self.assertIn("## Codex Reply", proc.stdout)
@@ -445,9 +445,9 @@ class CodexSkillIntegrationTests(unittest.TestCase):
                     reminder_turn_count=1,
                 )
             ],
-            claude={
-                "baseline": "Claude baseline text.",
-                "working_style": "Claude working style.",
+            caller={
+                "baseline": "Caller baseline text.",
+                "working_style": "Caller working style.",
                 "extra_context": None,
                 "stage_guidance": {},
             },
@@ -466,7 +466,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         self.assertNotIn("### Agent Focus", capture["stdin"])
         self.assertIn("## Codex Skill Reminder (Brief)", proc.stdout)
         self.assertIn("## User Reminder (Brief)", proc.stdout)
-        self.assertNotIn("### Claude Baseline", proc.stdout)
+        self.assertNotIn("### Caller Baseline", proc.stdout)
         agent = self.find_agent(state, "default")
         self.assertEqual(agent["reminder_turn_count"], 2)
 
@@ -546,7 +546,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         assert capture is not None
         self.assertEqual(self.sandbox_from_argv(capture["argv"]), "read-only")
-        self.assertIn("Sync message from Claude:", capture["stdin"])
+        self.assertIn("Sync message from the caller:", capture["stdin"])
         self.assertIn("## Plan", proc.stdout)
 
     def test_request_mutation_defaults_to_workspace_write(self) -> None:
@@ -560,7 +560,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         assert capture is not None
         self.assertEqual(self.sandbox_from_argv(capture["argv"]), "workspace-write")
         self.assertIn("workspace-write (default mutation sandbox)", capture["stdin"])
-        self.assertIn("Approved mutation from Claude:", capture["stdin"])
+        self.assertIn("Approved mutation from the caller:", capture["stdin"])
 
     def test_request_mutation_full_access_escalates_to_danger_full_access(self) -> None:
         proc, capture, _state = self.run_skill(
@@ -573,7 +573,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         assert capture is not None
         self.assertEqual(self.sandbox_from_argv(capture["argv"]), "danger-full-access")
         self.assertIn(
-            "danger-full-access (explicit full-access escalation approved by Claude)",
+            "danger-full-access (explicit full-access escalation approved by the caller)",
             capture["stdin"],
         )
 

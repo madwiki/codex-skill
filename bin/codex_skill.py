@@ -27,7 +27,7 @@ VERBATIM_END = "<<<USER_MESSAGE_VERBATIM_END>>>"
 INIT_TASK_FIELD = "task_background"
 INIT_RECOVERY_FIELD = "recovery_background"
 INIT_MUTATION_OWNER_FIELD = "mutation_owner"
-INIT_MUTATION_OWNER_CLAUDE = "claude"
+INIT_MUTATION_OWNER_CALLER = "caller"
 INIT_MUTATION_OWNER_CODEX = "codex"
 REVIEW_PLAN_FIELD = "plan_for_review"
 REVIEW_PLAN_NEW_INFO_FIELD = "new_information"
@@ -51,7 +51,7 @@ DANGEROUS_NEW_SESSION_TARGET_FIELD = "target_session_id"
 DANGEROUS_NEW_SESSION_DESCRIPTION_FIELD = "agent_description"
 DANGEROUS_NEW_SESSION_MODEL_FIELD = "model"
 DANGEROUS_NEW_SESSION_REASONING_EFFORT_FIELD = "reasoning_effort"
-CONFIGURE_CLAUDE_FIELD = "claude"
+CONFIGURE_CALLER_FIELD = "caller"
 CONFIGURE_SHARED_STAGES_FIELD = "shared_stages"
 CONFIGURE_WORK_MODES_FIELD = "work_modes"
 CONFIGURE_AGENTS_FIELD = "agents"
@@ -76,13 +76,13 @@ REF_PATTERN = re.compile(r"\[\[REF:(?P<path>[^:\]]+?)(?:::(?P<locator>[^\]]+))?\
 
 TOOL_HELP = {
     "init": "Bootstrap Codex collaboration for a new task or recovery sync (reads JSON from stdin).",
-    "chat": "Claude-mutates discussion / disagreement resolution (reads JSON from stdin).",
-    "review-my-plan": "Claude-mutates mode: Codex reviews Claude's plan without mutating state (reads JSON from stdin).",
-    "review-my-work": "Claude-mutates mode: Codex reviews Claude's work without mutating state (reads JSON from stdin).",
+    "chat": "caller-mutates discussion / disagreement resolution (reads JSON from stdin).",
+    "review-my-plan": "caller-mutates mode: Codex reviews the caller's plan without mutating state (reads JSON from stdin).",
+    "review-my-work": "caller-mutates mode: Codex reviews the caller's work without mutating state (reads JSON from stdin).",
     "work-sync": "Codex-mutates sync turn for discussion, plan output, and review response (reads JSON from stdin).",
     "request-mutation": "Codex-mutates mode: Codex performs one approved mutation step (reads JSON from stdin).",
     "dangerous-new-session": "Explicitly authorize discarding continuity and starting or switching a managed Codex agent session (reads JSON from stdin).",
-    "configure": "Update the managed Codex skill config, Claude baseline, workflow guidance, or agent metadata (reads JSON from stdin).",
+    "configure": "Update the managed Codex skill config, caller baseline, workflow guidance, or agent metadata (reads JSON from stdin).",
 }
 
 
@@ -115,7 +115,7 @@ def find_session_root(start: Path) -> Optional[Path]:
     file.
 
     IMPORTANT:
-    - Never treat the global Claude Code config directory (~/.claude) as a project root.
+    - Never treat the global ~/.claude directory as a project root.
     - `.claude/codex_agents.json` is the stable anchor.
     - `.claude/codex_session.json` is still accepted only as a legacy anchor so the wrapper can
       migrate it once into the new structured config.
@@ -184,7 +184,7 @@ class AgentConfig:
 
 
 @dataclass(frozen=True)
-class ClaudeConfig:
+class CallerConfig:
     baseline: Optional[str]
     working_style: Optional[str]
     extra_context: Optional[str]
@@ -199,7 +199,7 @@ class WorkModeConfig:
 @dataclass(frozen=True)
 class SkillConfig:
     version: int
-    claude: ClaudeConfig
+    caller: CallerConfig
     shared_stages: dict[str, str]
     work_modes: dict[str, WorkModeConfig]
     agents: list[AgentConfig]
@@ -327,8 +327,8 @@ def agent_config_to_json(agent: AgentConfig) -> dict[str, object]:
     }
 
 
-def default_claude_config() -> ClaudeConfig:
-    return ClaudeConfig(
+def default_caller_config() -> CallerConfig:
+    return CallerConfig(
         baseline=None,
         working_style=None,
         extra_context=None,
@@ -338,7 +338,7 @@ def default_claude_config() -> ClaudeConfig:
 
 def default_work_modes() -> dict[str, WorkModeConfig]:
     return {
-        "claude_mutates": WorkModeConfig(stages={}),
+        "caller_mutates": WorkModeConfig(stages={}),
         "codex_mutates": WorkModeConfig(stages={}),
     }
 
@@ -346,7 +346,7 @@ def default_work_modes() -> dict[str, WorkModeConfig]:
 def default_skill_config(agents: Optional[list[AgentConfig]] = None) -> SkillConfig:
     return SkillConfig(
         version=CONFIG_VERSION,
-        claude=default_claude_config(),
+        caller=default_caller_config(),
         shared_stages={},
         work_modes=default_work_modes(),
         agents=list(agents or []),
@@ -354,20 +354,20 @@ def default_skill_config(agents: Optional[list[AgentConfig]] = None) -> SkillCon
     )
 
 
-def parse_claude_config(obj: object) -> ClaudeConfig:
+def parse_caller_config(obj: object) -> CallerConfig:
     if obj is None:
-        return default_claude_config()
+        return default_caller_config()
     if not isinstance(obj, dict):
-        raise ValueError("claude must be a JSON object when provided.")
-    return ClaudeConfig(
+        raise ValueError("caller must be a JSON object when provided.")
+    return CallerConfig(
         baseline=normalize_optional_string(obj.get("baseline")),
         working_style=normalize_optional_string(obj.get("working_style")),
         extra_context=normalize_optional_string(obj.get("extra_context")),
-        stage_guidance=normalize_string_map(obj.get("stage_guidance"), field_name="claude.stage_guidance"),
+        stage_guidance=normalize_string_map(obj.get("stage_guidance"), field_name="caller.stage_guidance"),
     )
 
 
-def claude_config_to_json(config: ClaudeConfig) -> dict[str, object]:
+def caller_config_to_json(config: CallerConfig) -> dict[str, object]:
     return {
         "baseline": config.baseline,
         "working_style": config.working_style,
@@ -386,6 +386,8 @@ def parse_work_modes(obj: object) -> dict[str, WorkModeConfig]:
         normalized_mode = normalize_optional_string(mode_name)
         if not normalized_mode:
             raise ValueError("work_modes contains an empty mode name.")
+        if normalized_mode == "claude_mutates":
+            normalized_mode = "caller_mutates"
         if not isinstance(raw_mode, dict):
             raise ValueError(f"work_modes.{normalized_mode} must be a JSON object.")
         stages = normalize_string_map(raw_mode.get("stages"), field_name=f"work_modes.{normalized_mode}.stages")
@@ -420,7 +422,8 @@ def parse_skill_config_object(obj: object, *, path: Path) -> SkillConfig:
         agents.append(agent)
     try:
         shared_stages = normalize_string_map(obj.get("shared_stages"), field_name="shared_stages")
-        claude = parse_claude_config(obj.get("claude"))
+        caller_source = obj.get("caller", obj.get("claude"))
+        caller = parse_caller_config(caller_source)
         work_modes = parse_work_modes(obj.get("work_modes"))
     except ValueError as exc:
         raise RuntimeError(str(exc)) from exc
@@ -432,7 +435,7 @@ def parse_skill_config_object(obj: object, *, path: Path) -> SkillConfig:
     updated_at = normalize_optional_string(obj.get("updated_at")) or iso_now()
     return SkillConfig(
         version=normalized_version,
-        claude=claude,
+        caller=caller,
         shared_stages=shared_stages,
         work_modes=work_modes,
         agents=agents,
@@ -443,7 +446,7 @@ def parse_skill_config_object(obj: object, *, path: Path) -> SkillConfig:
 def skill_config_to_json(config: SkillConfig) -> dict[str, object]:
     return {
         "version": config.version,
-        "claude": claude_config_to_json(config.claude),
+        "caller": caller_config_to_json(config.caller),
         "shared_stages": config.shared_stages,
         "work_modes": work_modes_to_json(config.work_modes),
         "agents": [agent_config_to_json(agent) for agent in config.agents],
@@ -588,15 +591,15 @@ def apply_configure_payload(
     config: SkillConfig,
     payload: ConfigurePayload,
 ) -> SkillConfig:
-    claude = config.claude
-    if payload.claude_patch is not None:
-        stage_patch = payload.claude_patch.get("stage_guidance")
-        claude = ClaudeConfig(
-            baseline=payload.claude_patch["baseline"] if "baseline" in payload.claude_patch else claude.baseline,
-            working_style=payload.claude_patch["working_style"] if "working_style" in payload.claude_patch else claude.working_style,
-            extra_context=payload.claude_patch["extra_context"] if "extra_context" in payload.claude_patch else claude.extra_context,
+    caller = config.caller
+    if payload.caller_patch is not None:
+        stage_patch = payload.caller_patch.get("stage_guidance")
+        caller = CallerConfig(
+            baseline=payload.caller_patch["baseline"] if "baseline" in payload.caller_patch else caller.baseline,
+            working_style=payload.caller_patch["working_style"] if "working_style" in payload.caller_patch else caller.working_style,
+            extra_context=payload.caller_patch["extra_context"] if "extra_context" in payload.caller_patch else caller.extra_context,
             stage_guidance=merge_string_map(
-                claude.stage_guidance,
+                caller.stage_guidance,
                 stage_patch if isinstance(stage_patch, dict) else None,
             ),
         )
@@ -647,7 +650,7 @@ def apply_configure_payload(
 
     return SkillConfig(
         version=CONFIG_VERSION,
-        claude=claude,
+        caller=caller,
         shared_stages=shared_stages,
         work_modes=work_modes,
         agents=agents,
@@ -706,7 +709,7 @@ class DangerousNewSessionPayload:
 
 @dataclass(frozen=True)
 class ConfigurePayload:
-    claude_patch: Optional[dict[str, object]]
+    caller_patch: Optional[dict[str, object]]
     shared_stages_patch: Optional[dict[str, Optional[str]]]
     work_modes_patch: Optional[dict[str, dict[str, Optional[str]]]]
     agents_patch: Optional[list[dict[str, object]]]
@@ -752,8 +755,10 @@ def parse_init_payload(stdin_text: str) -> InitPayload:
         raise ValueError("Init background must be a non-empty string.")
 
     mutation_owner = obj.get(INIT_MUTATION_OWNER_FIELD)
-    if mutation_owner not in {INIT_MUTATION_OWNER_CLAUDE, INIT_MUTATION_OWNER_CODEX}:
-        raise ValueError("Init field mutation_owner must be exactly 'claude' or 'codex'.")
+    if mutation_owner == "claude":
+        mutation_owner = INIT_MUTATION_OWNER_CALLER
+    if mutation_owner not in {INIT_MUTATION_OWNER_CALLER, INIT_MUTATION_OWNER_CODEX}:
+        raise ValueError("Init field mutation_owner must be exactly 'caller' or 'codex'.")
 
     return InitPayload(
         mode=mode,
@@ -1038,7 +1043,7 @@ def parse_configure_payload(stdin_text: str) -> ConfigurePayload:
     text = stdin_text.replace("\r\n", "\n").replace("\r", "\n").strip()
     if not text:
         raise ValueError(
-            "configure input is empty. Provide JSON with at least one of: claude, shared_stages, work_modes, agents."
+            "configure input is empty. Provide JSON with at least one of: caller, shared_stages, work_modes, agents."
         )
     try:
         obj = json.loads(text)
@@ -1048,43 +1053,47 @@ def parse_configure_payload(stdin_text: str) -> ConfigurePayload:
         raise ValueError("configure input must be a JSON object.")
 
     allowed_keys = {
-        CONFIGURE_CLAUDE_FIELD,
+        CONFIGURE_CALLER_FIELD,
         CONFIGURE_SHARED_STAGES_FIELD,
         CONFIGURE_WORK_MODES_FIELD,
         CONFIGURE_AGENTS_FIELD,
     }
-    unknown_keys = set(obj.keys()) - allowed_keys
+    legacy_keys = {"claude"} if "claude" in obj else set()
+    unknown_keys = set(obj.keys()) - allowed_keys - legacy_keys
     if unknown_keys:
         raise ValueError(f"configure input has unsupported fields: {', '.join(sorted(unknown_keys))}")
     if not obj:
         raise ValueError(
-            "configure input must contain at least one of: claude, shared_stages, work_modes, agents."
+            "configure input must contain at least one of: caller, shared_stages, work_modes, agents."
         )
 
-    claude_patch = obj.get(CONFIGURE_CLAUDE_FIELD)
-    if claude_patch is not None:
-        if not isinstance(claude_patch, dict):
-            raise ValueError("configure field claude must be a JSON object.")
-        allowed_claude_keys = {"baseline", "working_style", "extra_context", "stage_guidance"}
-        unknown_claude_keys = set(claude_patch.keys()) - allowed_claude_keys
-        if unknown_claude_keys:
+    if CONFIGURE_CALLER_FIELD in obj and "claude" in obj:
+        raise ValueError("configure input must not contain both caller and legacy claude fields.")
+
+    caller_patch = obj.get(CONFIGURE_CALLER_FIELD, obj.get("claude"))
+    if caller_patch is not None:
+        if not isinstance(caller_patch, dict):
+            raise ValueError("configure field caller must be a JSON object.")
+        allowed_caller_keys = {"baseline", "working_style", "extra_context", "stage_guidance"}
+        unknown_caller_keys = set(caller_patch.keys()) - allowed_caller_keys
+        if unknown_caller_keys:
             raise ValueError(
-                "configure.claude has unsupported fields: "
-                + ", ".join(sorted(unknown_claude_keys))
+                "configure.caller has unsupported fields: "
+                + ", ".join(sorted(unknown_caller_keys))
             )
-        if "stage_guidance" in claude_patch and claude_patch["stage_guidance"] is not None:
-            claude_patch = dict(claude_patch)
-            claude_patch["stage_guidance"] = parse_nullable_string_patch_map(
-                claude_patch["stage_guidance"],
-                field_name="configure.claude.stage_guidance",
+        if "stage_guidance" in caller_patch and caller_patch["stage_guidance"] is not None:
+            caller_patch = dict(caller_patch)
+            caller_patch["stage_guidance"] = parse_nullable_string_patch_map(
+                caller_patch["stage_guidance"],
+                field_name="configure.caller.stage_guidance",
             )
         for field in ("baseline", "working_style", "extra_context"):
-            if field in claude_patch:
-                value = claude_patch[field]
+            if field in caller_patch:
+                value = caller_patch[field]
                 if value is not None and (not isinstance(value, str) or not value.strip()):
-                    raise ValueError(f"configure.claude.{field} must be a non-empty string or null.")
+                    raise ValueError(f"configure.caller.{field} must be a non-empty string or null.")
                 if isinstance(value, str):
-                    claude_patch[field] = value.strip()
+                    caller_patch[field] = value.strip()
 
     shared_stages_patch = obj.get(CONFIGURE_SHARED_STAGES_FIELD)
     if shared_stages_patch is not None:
@@ -1103,6 +1112,8 @@ def parse_configure_payload(stdin_text: str) -> ConfigurePayload:
             mode_name = normalize_optional_string(raw_mode)
             if not mode_name:
                 raise ValueError("configure.work_modes contains an empty mode name.")
+            if mode_name == "claude_mutates":
+                mode_name = "caller_mutates"
             if not isinstance(raw_mode_value, dict):
                 raise ValueError(f"configure.work_modes.{mode_name} must be a JSON object.")
             stages_value = raw_mode_value.get("stages")
@@ -1160,7 +1171,7 @@ def parse_configure_payload(stdin_text: str) -> ConfigurePayload:
             agents_patch.append(normalized_agent)
 
     return ConfigurePayload(
-        claude_patch=claude_patch,
+        caller_patch=caller_patch,
         shared_stages_patch=shared_stages_patch,
         work_modes_patch=work_modes_patch,
         agents_patch=agents_patch,
@@ -1180,7 +1191,7 @@ def load_prompt_asset(name: str) -> str:
 
 def infer_mode_name(tool: str) -> Optional[str]:
     if tool in {"chat", "review-my-plan", "review-my-work"}:
-        return "claude_mutates"
+        return "caller_mutates"
     if tool in {"work-sync", "request-mutation"}:
         return "codex_mutates"
     return None
@@ -1261,60 +1272,60 @@ def build_codex_skill_reminder_text_for_codex(
 
     brief_map = {
         "chat": (
-            "Persistent collaboration turn with Claude, not the end user. "
+            "Persistent collaboration turn with the caller, not the end user. "
             "Discussion only; no mutation and no gate verdict. "
-            "Compare evidence, surface disagreement clearly, and only ask Claude to escalate to the user "
-            "if a real unresolved Claude/Codex disagreement has persisted for about 10 turns."
+            "Compare evidence, surface disagreement clearly, and only ask the caller to escalate to the user "
+            "if a real unresolved disagreement between you and the caller has persisted for about 10 turns."
         ),
         "review-my-plan": (
-            "Claude-mutates hard gate. Review the plan before mutation, do not mutate, and judge from facts and whole-system coherence. "
+            "caller-mutates hard gate. Review the plan before mutation, do not mutate, and judge from facts and whole-system coherence. "
             "The first non-empty line must be approved_to_mutate: true or approved_to_mutate: false, followed by ## Plan Review Reply. "
-            "Do not ask for user input unless a real unresolved Claude/Codex disagreement has persisted for about 10 turns."
+            "Do not ask for user input unless a real unresolved disagreement between you and the caller has persisted for about 10 turns."
         ),
         "review-my-work": (
-            "Claude-mutates hard gate. Review the actual work, not intent; do not mutate. "
+            "caller-mutates hard gate. Review the actual work, not intent; do not mutate. "
             "The first non-empty line must be approved_work: true or approved_work: false, followed by ## Work Review Reply. "
-            "Do not ask for user input unless a real unresolved Claude/Codex disagreement has persisted for about 10 turns."
+            "Do not ask for user input unless a real unresolved disagreement between you and the caller has persisted for about 10 turns."
         ),
         "work-sync": (
-            "Codex-mutates sync turn only. Discussion, disagreement handling, candidate plan formation, or response to Claude review are allowed; mutation is not. "
+            "codex-mutates sync turn only. Discussion, disagreement handling, candidate plan formation, or response to caller review are allowed; mutation is not. "
             "Return ## Discussion Reply, and add ## Plan only when a candidate plan is genuinely ready. "
-            "Do not ask for user input unless a real unresolved Claude/Codex disagreement has persisted for about 10 turns."
+            "Do not ask for user input unless a real unresolved disagreement between you and the caller has persisted for about 10 turns."
         ),
         "request-mutation": (
-            "Codex-mutates mutation turn. Perform only the approved step, do not widen scope, then stop and report what changed, what you verified, what concerns remain, and where you stopped. "
+            "codex-mutates mutation turn. Perform only the approved step, do not widen scope, then stop and report what changed, what you verified, what concerns remain, and where you stopped. "
             "Do not ask the user directly."
         ),
     }
     return brief_map.get(tool, prompt_text.strip())
 
 
-def build_codex_skill_reminder_text_for_claude(tool: str, *, full: bool) -> str:
+def build_codex_skill_reminder_text_for_caller(tool: str, *, full: bool) -> str:
     full_map = {
         "init": (
             "Run init on every new shared task, after compact/context clear, and whenever mutation ownership reverses. "
             "Init is collaboration bootstrap only. It is not session management, not discussion, and not mutation."
         ),
         "chat": (
-            "This is Claude-mutates discussion only. Do not treat chat as plan approval or mutation permission. "
-            "Keep pushing for real consensus, and do not stop for user input unless a real unresolved Claude/Codex disagreement has persisted for about 10 turns."
+            "This is caller-mutates discussion only. Do not treat chat as plan approval or mutation permission. "
+            "Keep pushing for real consensus, and do not stop for user input unless a real unresolved caller/Codex disagreement has persisted for about 10 turns."
         ),
         "review-my-plan": (
-            "This is the Claude-mutates hard gate before Claude mutates. Submit a concrete plan, require direct fact-checking, and do not treat mere discussion as approval. "
-            "Do not ask the user just because execution feels uncertain; escalate only when a real unresolved Claude/Codex disagreement has persisted for about 10 turns."
+            "This is the caller-mutates hard gate before the caller mutates. Submit a concrete plan, require direct fact-checking, and do not treat mere discussion as approval. "
+            "Do not ask the user just because execution feels uncertain; escalate only when a real unresolved caller/Codex disagreement has persisted for about 10 turns."
         ),
         "review-my-work": (
-            "This is the Claude-mutates hard gate before delivery. Review actual work, evidence, and coherence. "
+            "This is the caller-mutates hard gate before delivery. Review actual work, evidence, and coherence. "
             "approved_work: true accepts only the reviewed step, not automatically the whole larger plan; if more agreed steps remain, continue directly to the next step instead of stopping. "
-            "Do not ask the user just because next execution steps are undecided; escalate only when a real unresolved Claude/Codex disagreement has persisted for about 10 turns."
+            "Do not ask the user just because next execution steps are undecided; escalate only when a real unresolved caller/Codex disagreement has persisted for about 10 turns."
         ),
         "work-sync": (
-            "This is the Codex-mutates non-mutation sync turn. Use it for discussion, disagreement, candidate plans, and response to review. "
-            "It is not mutation permission. Escalate to the user only for a real unresolved Claude/Codex disagreement that has persisted for about 10 turns."
+            "This is the codex-mutates non-mutation sync turn. Use it for discussion, disagreement, candidate plans, and response to review. "
+            "It is not mutation permission. Escalate to the user only for a real unresolved caller/Codex disagreement that has persisted for about 10 turns."
         ),
         "request-mutation": (
-            "This is the only Codex-mutates mutation permission turn. Approve exactly one concrete step, then expect Codex to stop and report back. "
-            "Do not ask the user about whether to continue execution unless a real unresolved Claude/Codex disagreement has persisted for about 10 turns."
+            "This is the only codex-mutates mutation permission turn. Approve exactly one concrete step, then expect Codex to stop and report back. "
+            "Do not ask the user about whether to continue execution unless a real unresolved caller/Codex disagreement has persisted for about 10 turns."
         ),
         "configure": (
             "This command only updates the managed Codex Skill configuration. It does not mutate task files and it does not replace session continuity by itself."
@@ -1375,7 +1386,7 @@ def build_common_stage_items(
     return items
 
 
-def build_claude_user_items(
+def build_caller_user_items(
     config: SkillConfig,
     *,
     tool: str,
@@ -1383,16 +1394,16 @@ def build_claude_user_items(
     items: list[tuple[str, str]] = []
     stage_name = tool
 
-    if config.claude.baseline:
-        items.append(("Claude Baseline", config.claude.baseline))
-    if config.claude.working_style:
-        items.append(("Claude Working Style", config.claude.working_style))
-    if config.claude.extra_context:
-        items.append(("Claude Extra Context", config.claude.extra_context))
+    if config.caller.baseline:
+        items.append(("Caller Baseline", config.caller.baseline))
+    if config.caller.working_style:
+        items.append(("Caller Working Style", config.caller.working_style))
+    if config.caller.extra_context:
+        items.append(("Caller Extra Context", config.caller.extra_context))
 
-    claude_stage_text = config.claude.stage_guidance.get(stage_name)
-    if claude_stage_text:
-        items.append(("Claude Stage Guidance", claude_stage_text))
+    caller_stage_text = config.caller.stage_guidance.get(stage_name)
+    if caller_stage_text:
+        items.append(("Caller Stage Guidance", caller_stage_text))
 
     return items
 
@@ -1468,7 +1479,7 @@ def compose_prompt(
     return "\n\n".join(part for part in prompt_parts if part).strip() + "\n"
 
 
-def format_output_for_claude(
+def format_output_for_caller(
     repo_root: Path,
     config: SkillConfig,
     *,
@@ -1479,8 +1490,8 @@ def format_output_for_claude(
 ) -> str:
     normalized_reply = reply.rstrip()
     common_items = build_common_stage_items(config, tool=tool)
-    claude_items = build_claude_user_items(config, tool=tool)
-    skill_body_parts = [build_codex_skill_reminder_text_for_claude(tool, full=full_reminder)]
+    caller_items = build_caller_user_items(config, tool=tool)
+    skill_body_parts = [build_codex_skill_reminder_text_for_caller(tool, full=full_reminder)]
     common_body = render_named_items(common_items)
     if common_body:
         skill_body_parts.append(common_body)
@@ -1490,9 +1501,9 @@ def format_output_for_claude(
     )
 
     if full_reminder:
-        user_body = render_named_items(claude_items)
+        user_body = render_named_items(caller_items)
     else:
-        user_body = build_brief_user_reminder("User Reminder", claude_items, tool)
+        user_body = build_brief_user_reminder("User Reminder", caller_items, tool)
     user_block = ""
     if user_body:
         user_block = "## User Reminder ({})\n\n{}".format(
@@ -1524,18 +1535,18 @@ def build_init_prompt(
     payload = parse_init_payload(stdin_text)
     if payload.mode == "task":
         prompt_name = (
-            "init-task-claude.md"
-            if payload.mutation_owner == INIT_MUTATION_OWNER_CLAUDE
+            "init-task-caller.md"
+            if payload.mutation_owner == INIT_MUTATION_OWNER_CALLER
             else "init-task-codex.md"
         )
-        label = "Task background from Claude:"
+        label = "Task background from the caller:"
     else:
         prompt_name = (
-            "init-recovery-claude.md"
-            if payload.mutation_owner == INIT_MUTATION_OWNER_CLAUDE
+            "init-recovery-caller.md"
+            if payload.mutation_owner == INIT_MUTATION_OWNER_CALLER
             else "init-recovery-codex.md"
         )
-        label = "Recovery background from Claude:"
+        label = "Recovery background from the caller:"
 
     prompt = compose_prompt(
         repo_root,
@@ -1564,14 +1575,14 @@ def build_review_my_plan_prompt(
     payload = parse_review_my_plan_payload(stdin_text)
     parts = [
         load_prompt_asset("review-my-plan.md"),
-        "Plan for review from Claude:",
+        "Plan for review from the caller:",
         payload.plan_for_review,
     ]
 
     if payload.new_information:
         parts.extend(
             [
-                "New information from Claude:",
+                "New information from the caller:",
                 payload.new_information,
             ]
         )
@@ -1607,7 +1618,7 @@ def build_chat_prompt(
     payload = parse_chat_payload(stdin_text)
     parts = [
         load_prompt_asset("chat.md"),
-        "Message from Claude:",
+        "Message from the caller:",
         payload.message_for_codex,
     ]
 
@@ -1642,14 +1653,14 @@ def build_review_my_work_prompt(
     payload = parse_review_my_work_payload(stdin_text)
     parts = [
         load_prompt_asset("review-my-work.md"),
-        "Work for review from Claude:",
+        "Work for review from the caller:",
         payload.work_for_review,
     ]
 
     if payload.new_information:
         parts.extend(
             [
-                "New information from Claude:",
+                "New information from the caller:",
                 payload.new_information,
             ]
         )
@@ -1685,7 +1696,7 @@ def build_work_sync_prompt(
     payload = parse_work_sync_payload(stdin_text)
     parts = [
         load_prompt_asset("work-sync.md"),
-        "Sync message from Claude:",
+        "Sync message from the caller:",
         payload.sync_message,
     ]
 
@@ -1721,12 +1732,12 @@ def build_request_mutation_prompt(
     sandbox_note = (
         "Execution sandbox for this turn: workspace-write (default mutation sandbox)."
         if payload.sandbox_mode == REQUEST_MUTATION_SANDBOX_DEFAULT
-        else "Execution sandbox for this turn: danger-full-access (explicit full-access escalation approved by Claude)."
+        else "Execution sandbox for this turn: danger-full-access (explicit full-access escalation approved by the caller)."
     )
     parts = [
         load_prompt_asset("request-mutation.md"),
         sandbox_note,
-        "Approved mutation from Claude:",
+        "Approved mutation from the caller:",
         payload.approved_mutation,
     ]
 
@@ -1980,7 +1991,7 @@ def persist_agents_for_command(
         repo_root,
         SkillConfig(
             version=CONFIG_VERSION,
-            claude=config.claude,
+            caller=config.caller,
             shared_stages=config.shared_stages,
             work_modes=config.work_modes,
             agents=upsert_agent(config.agents, replace(agent, updated_at=iso_now())),
@@ -2204,7 +2215,7 @@ def main() -> int:
             "Could not find an existing managed session anchor:",
             f"  - <dir>/.claude/{AGENTS_FILENAME}",
             f"  - <dir>/.claude/{LEGACY_SESSION_FILENAME} (legacy, auto-migrated once)",
-            f"(excluding the global Claude Code directory: {CLAUDE_GLOBAL_DIR}).",
+            f"(excluding the global ~/.claude directory: {CLAUDE_GLOBAL_DIR}).",
             "",
             "Ask the user to choose a directory to store the Codex session for this workspace.",
         ]
@@ -2248,8 +2259,8 @@ def main() -> int:
             f"Target agent slot: {agent_name}",
             f"Config path: {agents_file_path(repo_root)}",
         ]
-        if payload.claude_patch is not None:
-            lines.append("Updated: claude")
+        if payload.caller_patch is not None:
+            lines.append("Updated: caller")
         if payload.shared_stages_patch is not None:
             lines.append("Updated: shared_stages")
         if payload.work_modes_patch is not None:
@@ -2259,7 +2270,7 @@ def main() -> int:
                 "Updated agents: " + ", ".join(patch["name"] for patch in payload.agents_patch)
             )
         sys.stdout.write(
-            format_output_for_claude(
+            format_output_for_caller(
                 repo_root,
                 updated_config,
                 tool="configure",
@@ -2353,7 +2364,7 @@ def main() -> int:
             lines.append("There was no prior managed session id for this agent to record.")
         updated_config = read_skill_config(repo_root)
         sys.stdout.write(
-            format_output_for_claude(
+            format_output_for_caller(
                 repo_root,
                 updated_config,
                 tool="dangerous-new-session",
@@ -2465,7 +2476,7 @@ def main() -> int:
             return 1
 
     sys.stdout.write(
-        format_output_for_claude(
+        format_output_for_caller(
             repo_root,
             config,
             tool=args.cmd,

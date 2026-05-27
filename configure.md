@@ -1,14 +1,14 @@
 # configure
 
-Use this command when Claude needs to update the managed Codex Skill configuration instead of editing `.claude/codex_agents.json` by hand.
+Use this command when the caller needs to update the managed Codex Skill configuration instead of editing `.claude/codex_agents.json` by hand.
 
 This command does **not** mutate task files and does **not** change the current session continuity by itself. It only updates the structured config that future wrapper calls will load.
 
-Claude must not call raw `codex` directly and must not manually edit, delete, or replace `<repo>/.claude/codex_agents.json`.
+The caller must not call raw `codex` directly and must not manually edit, delete, or replace `<repo>/.claude/codex_agents.json`.
 
 ## What this command can update
 
-- top-level `claude` text fields:
+- top-level `caller` text fields:
   - `baseline`
   - `working_style`
   - `extra_context`
@@ -19,15 +19,15 @@ Claude must not call raw `codex` directly and must not manually edit, delete, or
 
 Agent patches are applied by `name`. If the named agent does not exist yet, this command creates it with empty session continuity and the provided metadata.
 
-These text fields are user/Claude-owned guidance content. The wrapper still defines the workflow mechanics separately through the skill prompts and command contracts.
+These text fields are caller-owned guidance content. The wrapper still defines the workflow mechanics separately through the skill prompts and command contracts.
 
 Ownership boundaries:
 
-- `claude.*` is Claude-side guidance. It is returned to Claude in wrapper output and is not injected into Codex prompts.
+- `caller.*` is caller-side guidance. It is returned to the caller in wrapper output and is not injected into Codex prompts.
 - `shared_stages` and `work_modes.*.stages` are common stage guidance. They may be shown on both sides.
 - `agents[*].*` is agent-side guidance. It is injected only into the currently targeted Codex agent prompt.
 - Wrapper-injected system guidance is labeled `Codex Skill Reminder`.
-- User/Claude-configured guidance is labeled `User Reminder`.
+- User-configured guidance is labeled `User Reminder`.
 - `init` always carries the full reminder text. Normal ongoing turns use a per-agent 3-turn cadence: full reminder on turns 1, 4, 7, ... and a brief reminder on the two turns in between.
 
 ## Input contract
@@ -38,7 +38,7 @@ You may send any subset of these fields:
 
 ```json
 {
-  "claude": {
+  "caller": {
     "baseline": "Optional. Non-empty string or null.",
     "working_style": "Optional. Non-empty string or null.",
     "extra_context": "Optional. Non-empty string or null.",
@@ -50,7 +50,7 @@ You may send any subset of these fields:
     "init": "Optional. Non-empty string or null."
   },
   "work_modes": {
-    "claude_mutates": {
+    "caller_mutates": {
       "stages": {
         "review-my-plan": "Optional. Non-empty string or null."
       }
@@ -110,11 +110,11 @@ Rules:
 - References are pointers, not inline expansion.
 - `.claude/codex-skill-refs/` is the conventional place for long Codex Skill reference documents, but any workspace file may be referenced with the same syntax.
 - After compact, context clear, session replacement, or any continuity loss, if Codex cannot confidently identify the referenced source and relevant content, it must re-read the referenced file before relying on it.
-- Claude decides when to keep content inline and when to switch to `[[REF:...]]`. The wrapper only provides the reference protocol and reminder behavior.
+- The caller decides when to keep content inline and when to switch to `[[REF:...]]`. The wrapper only provides the reference protocol and reminder behavior.
 
 ## Output contract
 
-The wrapper replies in plain text. It should tell Claude:
+The wrapper replies in plain text. It should tell the caller:
 
 - that the config update was applied
 - which top-level sections were updated
