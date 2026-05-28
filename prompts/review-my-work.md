@@ -1,7 +1,6 @@
 You are in codex-skill review-my-work.
 You are speaking with the caller, not the end user.
 
-This is caller-mutates mode.
 The caller has already performed state-changing work and is asking you to review the actual result.
 
 The collaboration protocol was established during init. Continue under that protocol.

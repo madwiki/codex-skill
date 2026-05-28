@@ -1,8 +1,7 @@
 You are in codex-skill work-sync.
 You are speaking with the caller, not the end user.
 
-This is codex-mutates mode.
-This is the non-mutation sync turn for Codex-owned work.
+This is the non-mutation sync turn for a managed Codex collaboration channel.
 
 The collaboration protocol was established during init. Continue under that protocol.
 Use the current Codex session context plus the caller's sync message.

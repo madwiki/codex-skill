@@ -74,6 +74,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         baseline: Optional[str] = None,
         extra_context: Optional[str] = None,
         stage_guidance: Optional[dict[str, str]] = None,
+        can_mutate: bool = True,
         session_id: Optional[str] = None,
         model: Optional[str] = None,
         reasoning_effort: Optional[str] = None,
@@ -87,6 +88,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
             "baseline": baseline,
             "extra_context": extra_context,
             "stage_guidance": stage_guidance or {},
+            "can_mutate": can_mutate,
             "session_id": session_id,
             "model": model,
             "reasoning_effort": reasoning_effort,
@@ -101,21 +103,17 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         *,
         caller: Optional[dict] = None,
         shared_stages: Optional[dict[str, str]] = None,
-        work_modes: Optional[dict] = None,
     ) -> dict:
         return {
-            "version": 3,
+            "version": 4,
             "caller": caller or {
                 "baseline": None,
                 "working_style": None,
                 "extra_context": None,
                 "stage_guidance": {},
+                "can_mutate": True,
             },
             "shared_stages": shared_stages or {},
-            "work_modes": work_modes or {
-                "caller_mutates": {"stages": {}},
-                "codex_mutates": {"stages": {}},
-            },
             "agents": agents,
             "updated_at": "2026-05-26T00:00:00Z",
         }
@@ -246,7 +244,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
     def test_init_without_agent_config_creates_new_persistent_default_agent(self) -> None:
         proc, capture, state = self.run_skill(
             "init",
-            '{"task_background":"Current task brief","mutation_owner":"caller"}',
+            '{"task_background":"Current task brief"}',
             "## Task Understanding Reply\n\nLooks consistent.",
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -275,7 +273,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         self.assertEqual(agent["session_id"], "legacy-session")
         self.assertEqual(agent["previous_session_ids"], ["older-session", "oldest-session"])
 
-    def test_legacy_structured_config_is_migrated_to_version_3(self) -> None:
+    def test_legacy_structured_config_is_migrated_to_version_4(self) -> None:
         legacy_config = {
             "version": 2,
             "claude": {
@@ -314,23 +312,21 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         self.assertIn("resume", capture["argv"])
         self.assertIn("legacy-structured-session", capture["argv"])
         self.assertIn("Migration notice:", proc.stdout)
-        self.assertIn("Legacy structured config was migrated to version 3", proc.stdout)
+        self.assertIn("Legacy structured config was migrated to version 4", proc.stdout)
         self.assertIn("User-authored reminder text was left unchanged.", proc.stdout)
         payload = state["agents_payload"]
         assert payload is not None
-        self.assertEqual(payload["version"], 3)
+        self.assertEqual(payload["version"], 4)
         self.assertIn("caller", payload)
         self.assertNotIn("claude", payload)
         self.assertEqual(payload["caller"]["baseline"], "Keep the original task stable.")
-        self.assertEqual(
-            payload["work_modes"]["caller_mutates"]["stages"]["review-my-plan"],
-            "Still a hard gate.",
-        )
+        self.assertTrue(payload["caller"]["can_mutate"])
+        self.assertNotIn("work_modes", payload)
 
     def test_named_agent_is_created_when_selected(self) -> None:
         proc, _capture, state = self.run_skill(
             "init",
-            '{"task_background":"Current task brief","mutation_owner":"codex"}',
+            '{"task_background":"Current task brief"}',
             "## Task Understanding Reply\n\nSwitch to Codex-owned execution.",
             agent_name="reviewer-a",
         )
@@ -342,7 +338,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
     def test_effective_defaults_are_persisted_for_new_agent(self) -> None:
         proc, _capture, state = self.run_skill(
             "init",
-            '{"task_background":"Current task brief","mutation_owner":"caller"}',
+            '{"task_background":"Current task brief"}',
             "## Task Understanding Reply\n\nLooks consistent.",
             agent_name="baseline",
             env_extra={
@@ -362,21 +358,15 @@ class CodexSkillIntegrationTests(unittest.TestCase):
                 {
                     "caller": {
                         "baseline": "Keep original requirements stable.",
-                        "working_style": "Discuss before mutating.",
-                        "stage_guidance": {
-                            "review-my-plan": "Challenge weak evidence first."
-                        },
+                    "working_style": "Discuss before mutating.",
+                    "stage_guidance": {
+                        "review-my-plan": "Challenge weak evidence first."
                     },
-                    "shared_stages": {
-                        "init": "Always re-check continuity assumptions."
-                    },
-                    "work_modes": {
-                        "caller_mutates": {
-                            "stages": {
-                                "review-my-plan": "This is still a hard gate."
-                            }
-                        }
-                    },
+                    "can_mutate": False,
+                },
+                "shared_stages": {
+                    "init": "Always re-check continuity assumptions."
+                },
                     "agents": [
                         {
                             "name": "reviewer-a",
@@ -385,6 +375,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
                             "stage_guidance": {
                                 "review-my-plan": "Push back on scope creep."
                             },
+                            "can_mutate": False,
                             "model": "gpt-review",
                             "reasoning_effort": "high",
                         }
@@ -398,13 +389,11 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         payload = state["agents_payload"]
         assert payload is not None
         self.assertEqual(payload["caller"]["baseline"], "Keep original requirements stable.")
+        self.assertFalse(payload["caller"]["can_mutate"])
         self.assertEqual(payload["shared_stages"]["init"], "Always re-check continuity assumptions.")
-        self.assertEqual(
-            payload["work_modes"]["caller_mutates"]["stages"]["review-my-plan"],
-            "This is still a hard gate.",
-        )
         reviewer = self.find_agent(state, "reviewer-a")
         self.assertEqual(reviewer["focus"], "Watch for architectural drift.")
+        self.assertFalse(reviewer["can_mutate"])
         self.assertEqual(reviewer["model"], "gpt-review")
 
     def test_prompt_includes_config_sections_and_ref_notice(self) -> None:
@@ -451,17 +440,10 @@ class CodexSkillIntegrationTests(unittest.TestCase):
                 "stage_guidance": {
                     "review-my-plan": "Before mutation, insist on a concrete plan."
                 },
+                "can_mutate": False,
             },
             shared_stages={
                 "review-my-plan": "This is a shared hard-gate stage."
-            },
-            work_modes={
-                "caller_mutates": {
-                    "stages": {
-                        "review-my-plan": "Plan approval is mode-specific here."
-                    }
-                },
-                "codex_mutates": {"stages": {}},
             },
         )
         proc, capture, _state = self.run_skill(
@@ -476,14 +458,13 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         self.assertNotIn("## Caller Working Style", capture["stdin"])
         self.assertNotIn("## Caller Stage Guidance", capture["stdin"])
         self.assertIn("### Shared Stage Guidance", capture["stdin"])
-        self.assertIn("### Workflow Stage Guidance", capture["stdin"])
         self.assertIn("## Codex Skill Reminder (Full)", proc.stdout)
         self.assertIn("## User Reminder (Full)", proc.stdout)
         self.assertIn("### Caller Baseline", proc.stdout)
         self.assertIn("### Caller Working Style", proc.stdout)
+        self.assertIn("### Caller Mutation Permission", proc.stdout)
         self.assertIn("### Caller Stage Guidance", proc.stdout)
         self.assertIn("### Shared Stage Guidance", proc.stdout)
-        self.assertIn("### Workflow Stage Guidance", proc.stdout)
         self.assertIn("## Codex Reply", proc.stdout)
 
     def test_non_init_turns_use_full_then_brief_reminder_cadence(self) -> None:
@@ -502,6 +483,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
                 "working_style": "Caller working style.",
                 "extra_context": None,
                 "stage_guidance": {},
+                "can_mutate": False,
             },
         )
         proc, capture, state = self.run_skill(
@@ -628,6 +610,17 @@ class CodexSkillIntegrationTests(unittest.TestCase):
             "danger-full-access (explicit full-access escalation approved by the caller)",
             capture["stdin"],
         )
+
+    def test_request_mutation_rejects_non_mutating_channel(self) -> None:
+        proc, _capture, _state = self.run_skill(
+            "request-mutation",
+            '{"approved_mutation":"Implement the approved parser fix and stop."}',
+            initial_agents=[self.build_agent("reviewer-a", session_id="existing-session", can_mutate=False)],
+            agent_name="reviewer-a",
+        )
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("can_mutate: false", proc.stderr)
+        self.assertIn("mutate-capable channel", proc.stderr)
 
     def test_missing_thread_error_requires_explicit_dangerous_reset(self) -> None:
         proc, _capture, _state = self.run_skill(

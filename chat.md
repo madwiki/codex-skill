@@ -1,39 +1,18 @@
 # chat
 
-Use this as the shared discussion mode for the **caller-mutates** path, or for general peer discussion before that path's review gates.
+Use this as the general discussion command.
 
-If Codex and the caller disagree on the caller-mutates path, use `chat`. Do not move to mutation until the disagreement is resolved or the user decides.
+Use it for:
 
-## When to use
+- routine progress sync
+- requirements discussion
+- disagreements
+- stuck or unclear states
+- preparing the smallest useful user-facing decision when consensus is not reachable
 
-- Routine progress sync that would otherwise be told only to the user
-- Requirements discussion or understanding checks
-- Choosing between caller-mutates and codex-mutates mode
-- Mid-task changes, new constraints, or user changes of direction
-- Disagreements between the caller and Codex
-- Stuck, unclear, unresolved, risky, or confusing states
-- Preparing the smallest user-facing decision when consensus is not reachable
-
-## Collaboration rules
-
-- Treat each message as a continuation of the same Codex collaboration session.
-- For a new shared task, or after compact/context clear, run `init.md` before using chat.
-- `chat` is discussion only. It does not authorize mutation.
-- On the codex-mutates path, use `work-sync.md` instead of `chat.md`.
-- Include what happened since the last Codex reply, including what the caller told the user when it affects the current state.
-- Include a verbatim user message only if the user actually said something new since the last Codex call.
-- If there is no new user message, omit the verbatim user block entirely.
-- Do not fabricate, summarize-as-verbatim, or reuse stale user text to satisfy a template.
-- Treat Codex as a peer collaborator, not an authority. Codex can be wrong; the caller can be wrong.
-- Use read-only investigation and concrete evidence to test both agents' claims.
-- In review or disagreement, check both facts and whole-system coherence. Do not accept the other agent's framing just to move forward.
-- Chat is not the normal place for state-changing work. Prefer the dedicated mutation-owner entrypoint once consensus exists.
+`chat` is discussion only. It does not authorize mutation.
 
 ## Input contract
-
-Call `chat` with JSON on stdin.
-
-Required:
 
 ```json
 {
@@ -41,7 +20,7 @@ Required:
 }
 ```
 
-Optional addition:
+Optional:
 
 ```json
 {
@@ -49,24 +28,3 @@ Optional addition:
   "fresh_user_message": "Only if the user actually said new words that matter for this discussion."
 }
 ```
-
-Rules:
-
-- `message_for_codex` is required
-- `fresh_user_message` is optional
-- no other top-level fields are accepted
-- include new facts, new constraints, disagreement, or next-step questions directly inside `message_for_codex`
-
-## Output
-
-Codex replies in normal text. `chat` does not enforce a JSON reply format.
-
-## Run
-
-```bash
-<skill_root>/bin/codex-skill-chat < chat.json
-```
-
-`<skill_root>` is typically `~/.claude/skills/codex-skill`.
-
-The command may take a long time. Wait for Codex to finish unless the process clearly fails.

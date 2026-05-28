@@ -26,9 +26,6 @@ VERBATIM_BEGIN = "<<<USER_MESSAGE_VERBATIM_BEGIN>>>"
 VERBATIM_END = "<<<USER_MESSAGE_VERBATIM_END>>>"
 INIT_TASK_FIELD = "task_background"
 INIT_RECOVERY_FIELD = "recovery_background"
-INIT_MUTATION_OWNER_FIELD = "mutation_owner"
-INIT_MUTATION_OWNER_CALLER = "caller"
-INIT_MUTATION_OWNER_CODEX = "codex"
 REVIEW_PLAN_FIELD = "plan_for_review"
 REVIEW_PLAN_NEW_INFO_FIELD = "new_information"
 REVIEW_PLAN_FRESH_USER_FIELD = "fresh_user_message"
@@ -53,7 +50,6 @@ DANGEROUS_NEW_SESSION_MODEL_FIELD = "model"
 DANGEROUS_NEW_SESSION_REASONING_EFFORT_FIELD = "reasoning_effort"
 CONFIGURE_CALLER_FIELD = "caller"
 CONFIGURE_SHARED_STAGES_FIELD = "shared_stages"
-CONFIGURE_WORK_MODES_FIELD = "work_modes"
 CONFIGURE_AGENTS_FIELD = "agents"
 INIT_TASK_REPLY_TITLE = "Task Understanding Reply"
 INIT_RECOVERY_REPLY_TITLE = "Context Recovery Reply"
@@ -70,19 +66,19 @@ LEGACY_HISTORY_FILENAME = "codex_session_history.json"
 DEFAULT_AGENT_NAME = "default"
 DEFAULT_AGENT_DESCRIPTION = "Primary Codex collaboration channel."
 MIGRATED_AGENT_DESCRIPTION = "Migrated primary Codex collaboration channel."
-CONFIG_VERSION = 3
+CONFIG_VERSION = 4
 REF_DIRECTORY = ".claude/codex-skill-refs"
 REF_PATTERN = re.compile(r"\[\[REF:(?P<path>[^:\]]+?)(?:::(?P<locator>[^\]]+))?\]\]")
 
 TOOL_HELP = {
     "init": "Bootstrap Codex collaboration for a new task or recovery sync (reads JSON from stdin).",
-    "chat": "caller-mutates discussion / disagreement resolution (reads JSON from stdin).",
-    "review-my-plan": "caller-mutates mode: Codex reviews the caller's plan without mutating state (reads JSON from stdin).",
-    "review-my-work": "caller-mutates mode: Codex reviews the caller's work without mutating state (reads JSON from stdin).",
-    "work-sync": "Codex-mutates sync turn for discussion, plan output, and review response (reads JSON from stdin).",
-    "request-mutation": "Codex-mutates mode: Codex performs one approved mutation step (reads JSON from stdin).",
+    "chat": "Discussion / disagreement resolution turn (reads JSON from stdin).",
+    "review-my-plan": "Codex reviews the caller's plan without mutating state (reads JSON from stdin).",
+    "review-my-work": "Codex reviews completed work without mutating state (reads JSON from stdin).",
+    "work-sync": "Codex sync turn for discussion, plan output, and review response (reads JSON from stdin).",
+    "request-mutation": "Codex performs one approved mutation step when this channel is allowed to mutate (reads JSON from stdin).",
     "dangerous-new-session": "Explicitly authorize discarding continuity and starting or switching a managed Codex agent session (reads JSON from stdin).",
-    "configure": "Update the managed Codex skill config, caller baseline, workflow guidance, or agent metadata (reads JSON from stdin).",
+    "configure": "Update the managed Codex skill config, caller baseline, shared guidance, or channel metadata (reads JSON from stdin).",
 }
 
 
@@ -175,6 +171,7 @@ class AgentConfig:
     baseline: Optional[str]
     extra_context: Optional[str]
     stage_guidance: dict[str, str]
+    can_mutate: bool
     session_id: Optional[str]
     model: Optional[str]
     reasoning_effort: Optional[str]
@@ -189,11 +186,7 @@ class CallerConfig:
     working_style: Optional[str]
     extra_context: Optional[str]
     stage_guidance: dict[str, str]
-
-
-@dataclass(frozen=True)
-class WorkModeConfig:
-    stages: dict[str, str]
+    can_mutate: bool
 
 
 @dataclass(frozen=True)
@@ -201,7 +194,6 @@ class SkillConfig:
     version: int
     caller: CallerConfig
     shared_stages: dict[str, str]
-    work_modes: dict[str, WorkModeConfig]
     agents: list[AgentConfig]
     updated_at: str
 
@@ -258,6 +250,7 @@ def build_agent_config(
     baseline: Optional[str] = None,
     extra_context: Optional[str] = None,
     stage_guidance: Optional[dict[str, str]] = None,
+    can_mutate: bool = True,
     session_id: Optional[str] = None,
     model: Optional[str] = None,
     reasoning_effort: Optional[str] = None,
@@ -277,6 +270,7 @@ def build_agent_config(
         baseline=normalize_optional_string(baseline),
         extra_context=normalize_optional_string(extra_context),
         stage_guidance=dict(stage_guidance or {}),
+        can_mutate=bool(can_mutate),
         session_id=normalize_optional_string(session_id),
         model=normalize_optional_string(model),
         reasoning_effort=normalize_optional_string(reasoning_effort),
@@ -294,6 +288,9 @@ def parse_agent_config(obj: object) -> AgentConfig:
         raise ValueError("Each agent entry requires a non-empty string field: name.")
     description = normalize_optional_string(obj.get("description")) or default_agent_description(name)
     updated_at = normalize_optional_string(obj.get("updated_at")) or iso_now()
+    raw_can_mutate = obj.get("can_mutate", True)
+    if not isinstance(raw_can_mutate, bool):
+        raise ValueError(f"agents[{name}].can_mutate must be a boolean when provided.")
     return AgentConfig(
         name=name,
         description=description,
@@ -301,6 +298,7 @@ def parse_agent_config(obj: object) -> AgentConfig:
         baseline=normalize_optional_string(obj.get("baseline")),
         extra_context=normalize_optional_string(obj.get("extra_context")),
         stage_guidance=normalize_string_map(obj.get("stage_guidance"), field_name=f"agents[{name}].stage_guidance"),
+        can_mutate=raw_can_mutate,
         session_id=normalize_optional_string(obj.get("session_id")),
         model=normalize_optional_string(obj.get("model")),
         reasoning_effort=normalize_optional_string(obj.get("reasoning_effort")),
@@ -318,6 +316,7 @@ def agent_config_to_json(agent: AgentConfig) -> dict[str, object]:
         "baseline": agent.baseline,
         "extra_context": agent.extra_context,
         "stage_guidance": agent.stage_guidance,
+        "can_mutate": agent.can_mutate,
         "session_id": agent.session_id,
         "model": agent.model,
         "reasoning_effort": agent.reasoning_effort,
@@ -333,14 +332,8 @@ def default_caller_config() -> CallerConfig:
         working_style=None,
         extra_context=None,
         stage_guidance={},
+        can_mutate=True,
     )
-
-
-def default_work_modes() -> dict[str, WorkModeConfig]:
-    return {
-        "caller_mutates": WorkModeConfig(stages={}),
-        "codex_mutates": WorkModeConfig(stages={}),
-    }
 
 
 def default_skill_config(agents: Optional[list[AgentConfig]] = None) -> SkillConfig:
@@ -348,7 +341,6 @@ def default_skill_config(agents: Optional[list[AgentConfig]] = None) -> SkillCon
         version=CONFIG_VERSION,
         caller=default_caller_config(),
         shared_stages={},
-        work_modes=default_work_modes(),
         agents=list(agents or []),
         updated_at=iso_now(),
     )
@@ -359,11 +351,15 @@ def parse_caller_config(obj: object) -> CallerConfig:
         return default_caller_config()
     if not isinstance(obj, dict):
         raise ValueError("caller must be a JSON object when provided.")
+    raw_can_mutate = obj.get("can_mutate", True)
+    if not isinstance(raw_can_mutate, bool):
+        raise ValueError("caller.can_mutate must be a boolean when provided.")
     return CallerConfig(
         baseline=normalize_optional_string(obj.get("baseline")),
         working_style=normalize_optional_string(obj.get("working_style")),
         extra_context=normalize_optional_string(obj.get("extra_context")),
         stage_guidance=normalize_string_map(obj.get("stage_guidance"), field_name="caller.stage_guidance"),
+        can_mutate=raw_can_mutate,
     )
 
 
@@ -373,34 +369,7 @@ def caller_config_to_json(config: CallerConfig) -> dict[str, object]:
         "working_style": config.working_style,
         "extra_context": config.extra_context,
         "stage_guidance": config.stage_guidance,
-    }
-
-
-def parse_work_modes(obj: object) -> dict[str, WorkModeConfig]:
-    if obj is None:
-        return default_work_modes()
-    if not isinstance(obj, dict):
-        raise ValueError("work_modes must be a JSON object when provided.")
-    result = default_work_modes()
-    for mode_name, raw_mode in obj.items():
-        normalized_mode = normalize_optional_string(mode_name)
-        if not normalized_mode:
-            raise ValueError("work_modes contains an empty mode name.")
-        if normalized_mode == "claude_mutates":
-            normalized_mode = "caller_mutates"
-        if not isinstance(raw_mode, dict):
-            raise ValueError(f"work_modes.{normalized_mode} must be a JSON object.")
-        stages = normalize_string_map(raw_mode.get("stages"), field_name=f"work_modes.{normalized_mode}.stages")
-        result[normalized_mode] = WorkModeConfig(stages=stages)
-    return result
-
-
-def work_modes_to_json(work_modes: dict[str, WorkModeConfig]) -> dict[str, object]:
-    return {
-        name: {
-            "stages": config.stages,
-        }
-        for name, config in work_modes.items()
+        "can_mutate": config.can_mutate,
     }
 
 
@@ -424,7 +393,6 @@ def parse_skill_config_object(obj: object, *, path: Path) -> SkillConfig:
         shared_stages = normalize_string_map(obj.get("shared_stages"), field_name="shared_stages")
         caller_source = obj.get("caller", obj.get("claude"))
         caller = parse_caller_config(caller_source)
-        work_modes = parse_work_modes(obj.get("work_modes"))
     except ValueError as exc:
         raise RuntimeError(str(exc)) from exc
     version = obj.get("version")
@@ -437,7 +405,6 @@ def parse_skill_config_object(obj: object, *, path: Path) -> SkillConfig:
         version=normalized_version,
         caller=caller,
         shared_stages=shared_stages,
-        work_modes=work_modes,
         agents=agents,
         updated_at=updated_at,
     )
@@ -448,7 +415,6 @@ def skill_config_to_json(config: SkillConfig) -> dict[str, object]:
         "version": config.version,
         "caller": caller_config_to_json(config.caller),
         "shared_stages": config.shared_stages,
-        "work_modes": work_modes_to_json(config.work_modes),
         "agents": [agent_config_to_json(agent) for agent in config.agents],
         "updated_at": config.updated_at,
     }
@@ -514,9 +480,16 @@ def structured_config_needs_migration(raw_obj: dict[str, object]) -> bool:
     version = raw_obj.get("version")
     if not isinstance(version, int) or version < CONFIG_VERSION:
         return True
-    work_modes = raw_obj.get("work_modes")
-    if isinstance(work_modes, dict) and "claude_mutates" in work_modes:
+    if "work_modes" in raw_obj:
         return True
+    caller = raw_obj.get("caller")
+    if not isinstance(caller, dict) or "can_mutate" not in caller:
+        return True
+    agents = raw_obj.get("agents")
+    if isinstance(agents, list):
+        for raw_agent in agents:
+            if not isinstance(raw_agent, dict) or "can_mutate" not in raw_agent:
+                return True
     return False
 
 
@@ -541,9 +514,9 @@ def migrate_agents_config_to_latest(
                 replace(migrated, version=CONFIG_VERSION, updated_at=iso_now()),
             )
             return (
-                "Legacy structured config was migrated to version 3 at "
+                "Legacy structured config was migrated to version 4 at "
                 f"{config_path}. Structural keys were normalized automatically "
-                "(for example, legacy caller fields and mode names). User-authored "
+                "(for example, legacy caller fields, obsolete work_modes, and missing mutation-permission fields). User-authored "
                 "reminder text was left unchanged. If you also want old caller-facing "
                 "wording inside those reminder texts updated, have the caller confirm "
                 "that change with the user and then apply it through configure."
@@ -628,17 +601,10 @@ def apply_configure_payload(
                 caller.stage_guidance,
                 stage_patch if isinstance(stage_patch, dict) else None,
             ),
+            can_mutate=payload.caller_patch["can_mutate"] if "can_mutate" in payload.caller_patch else caller.can_mutate,
         )
 
     shared_stages = merge_string_map(config.shared_stages, payload.shared_stages_patch)
-
-    work_modes = {name: WorkModeConfig(stages=dict(mode.stages)) for name, mode in config.work_modes.items()}
-    if payload.work_modes_patch:
-        for mode_name, stages_patch in payload.work_modes_patch.items():
-            current_mode = work_modes.get(mode_name, WorkModeConfig(stages={}))
-            work_modes[mode_name] = WorkModeConfig(
-                stages=merge_string_map(current_mode.stages, stages_patch),
-            )
 
     agents = list(config.agents)
     if payload.agents_patch:
@@ -653,6 +619,7 @@ def apply_configure_payload(
                     baseline=patch.get("baseline"),
                     extra_context=patch.get("extra_context"),
                     stage_guidance=merge_string_map({}, patch.get("stage_guidance") if isinstance(patch.get("stage_guidance"), dict) else None),
+                    can_mutate=patch.get("can_mutate", True),
                     model=patch.get("model"),
                     reasoning_effort=patch.get("reasoning_effort"),
                 )
@@ -667,6 +634,7 @@ def apply_configure_payload(
                         existing.stage_guidance,
                         patch.get("stage_guidance") if isinstance(patch.get("stage_guidance"), dict) else None,
                     ),
+                    can_mutate=patch.get("can_mutate") if "can_mutate" in patch else existing.can_mutate,
                     session_id=existing.session_id,
                     model=patch.get("model") if "model" in patch else existing.model,
                     reasoning_effort=patch.get("reasoning_effort") if "reasoning_effort" in patch else existing.reasoning_effort,
@@ -678,7 +646,6 @@ def apply_configure_payload(
         version=CONFIG_VERSION,
         caller=caller,
         shared_stages=shared_stages,
-        work_modes=work_modes,
         agents=agents,
         updated_at=iso_now(),
     )
@@ -688,7 +655,6 @@ def apply_configure_payload(
 class InitPayload:
     mode: str
     background: str
-    mutation_owner: str
 
 
 @dataclass(frozen=True)
@@ -737,7 +703,6 @@ class DangerousNewSessionPayload:
 class ConfigurePayload:
     caller_patch: Optional[dict[str, object]]
     shared_stages_patch: Optional[dict[str, Optional[str]]]
-    work_modes_patch: Optional[dict[str, dict[str, Optional[str]]]]
     agents_patch: Optional[list[dict[str, object]]]
 
 
@@ -746,7 +711,7 @@ def parse_init_payload(stdin_text: str) -> InitPayload:
     if not text:
         raise ValueError(
             "Init input is empty. Provide JSON with exactly one of: task_background or "
-            "recovery_background, plus mutation_owner."
+            "recovery_background."
         )
 
     try:
@@ -760,7 +725,6 @@ def parse_init_payload(stdin_text: str) -> InitPayload:
     allowed_keys = {
         INIT_TASK_FIELD,
         INIT_RECOVERY_FIELD,
-        INIT_MUTATION_OWNER_FIELD,
     }
     unknown_keys = set(obj.keys()) - allowed_keys
     if unknown_keys:
@@ -780,16 +744,9 @@ def parse_init_payload(stdin_text: str) -> InitPayload:
     if not isinstance(value, str) or not value.strip():
         raise ValueError("Init background must be a non-empty string.")
 
-    mutation_owner = obj.get(INIT_MUTATION_OWNER_FIELD)
-    if mutation_owner == "claude":
-        mutation_owner = INIT_MUTATION_OWNER_CALLER
-    if mutation_owner not in {INIT_MUTATION_OWNER_CALLER, INIT_MUTATION_OWNER_CODEX}:
-        raise ValueError("Init field mutation_owner must be exactly 'caller' or 'codex'.")
-
     return InitPayload(
         mode=mode,
         background=value.strip(),
-        mutation_owner=mutation_owner,
     )
 
 
@@ -1069,7 +1026,7 @@ def parse_configure_payload(stdin_text: str) -> ConfigurePayload:
     text = stdin_text.replace("\r\n", "\n").replace("\r", "\n").strip()
     if not text:
         raise ValueError(
-            "configure input is empty. Provide JSON with at least one of: caller, shared_stages, work_modes, agents."
+            "configure input is empty. Provide JSON with at least one of: caller, shared_stages, agents."
         )
     try:
         obj = json.loads(text)
@@ -1081,7 +1038,6 @@ def parse_configure_payload(stdin_text: str) -> ConfigurePayload:
     allowed_keys = {
         CONFIGURE_CALLER_FIELD,
         CONFIGURE_SHARED_STAGES_FIELD,
-        CONFIGURE_WORK_MODES_FIELD,
         CONFIGURE_AGENTS_FIELD,
     }
     legacy_keys = {"claude"} if "claude" in obj else set()
@@ -1090,7 +1046,7 @@ def parse_configure_payload(stdin_text: str) -> ConfigurePayload:
         raise ValueError(f"configure input has unsupported fields: {', '.join(sorted(unknown_keys))}")
     if not obj:
         raise ValueError(
-            "configure input must contain at least one of: caller, shared_stages, work_modes, agents."
+            "configure input must contain at least one of: caller, shared_stages, agents."
         )
 
     if CONFIGURE_CALLER_FIELD in obj and "claude" in obj:
@@ -1100,7 +1056,7 @@ def parse_configure_payload(stdin_text: str) -> ConfigurePayload:
     if caller_patch is not None:
         if not isinstance(caller_patch, dict):
             raise ValueError("configure field caller must be a JSON object.")
-        allowed_caller_keys = {"baseline", "working_style", "extra_context", "stage_guidance"}
+        allowed_caller_keys = {"baseline", "working_style", "extra_context", "stage_guidance", "can_mutate"}
         unknown_caller_keys = set(caller_patch.keys()) - allowed_caller_keys
         if unknown_caller_keys:
             raise ValueError(
@@ -1120,6 +1076,8 @@ def parse_configure_payload(stdin_text: str) -> ConfigurePayload:
                     raise ValueError(f"configure.caller.{field} must be a non-empty string or null.")
                 if isinstance(value, str):
                     caller_patch[field] = value.strip()
+        if "can_mutate" in caller_patch and not isinstance(caller_patch["can_mutate"], bool):
+            raise ValueError("configure.caller.can_mutate must be a boolean when provided.")
 
     shared_stages_patch = obj.get(CONFIGURE_SHARED_STAGES_FIELD)
     if shared_stages_patch is not None:
@@ -1127,29 +1085,6 @@ def parse_configure_payload(stdin_text: str) -> ConfigurePayload:
             shared_stages_patch,
             field_name="configure.shared_stages",
         )
-
-    work_modes_patch_value = obj.get(CONFIGURE_WORK_MODES_FIELD)
-    work_modes_patch: Optional[dict[str, dict[str, Optional[str]]]] = None
-    if work_modes_patch_value is not None:
-        if not isinstance(work_modes_patch_value, dict):
-            raise ValueError("configure field work_modes must be a JSON object.")
-        work_modes_patch = {}
-        for raw_mode, raw_mode_value in work_modes_patch_value.items():
-            mode_name = normalize_optional_string(raw_mode)
-            if not mode_name:
-                raise ValueError("configure.work_modes contains an empty mode name.")
-            if mode_name == "claude_mutates":
-                mode_name = "caller_mutates"
-            if not isinstance(raw_mode_value, dict):
-                raise ValueError(f"configure.work_modes.{mode_name} must be a JSON object.")
-            stages_value = raw_mode_value.get("stages")
-            if stages_value is None:
-                work_modes_patch[mode_name] = {}
-            else:
-                work_modes_patch[mode_name] = parse_nullable_string_patch_map(
-                    stages_value,
-                    field_name=f"configure.work_modes.{mode_name}.stages",
-                )
 
     agents_patch_value = obj.get(CONFIGURE_AGENTS_FIELD)
     agents_patch: Optional[list[dict[str, object]]] = None
@@ -1167,6 +1102,7 @@ def parse_configure_payload(stdin_text: str) -> ConfigurePayload:
                 "baseline",
                 "extra_context",
                 "stage_guidance",
+                "can_mutate",
                 "model",
                 "reasoning_effort",
             }
@@ -1194,12 +1130,13 @@ def parse_configure_payload(stdin_text: str) -> ConfigurePayload:
                     normalized_agent["stage_guidance"],
                     field_name=f"configure.agents[{index}].stage_guidance",
                 )
+            if "can_mutate" in normalized_agent and not isinstance(normalized_agent["can_mutate"], bool):
+                raise ValueError(f"configure.agents[{index}].can_mutate must be a boolean when provided.")
             agents_patch.append(normalized_agent)
 
     return ConfigurePayload(
         caller_patch=caller_patch,
         shared_stages_patch=shared_stages_patch,
-        work_modes_patch=work_modes_patch,
         agents_patch=agents_patch,
     )
 
@@ -1213,14 +1150,6 @@ def load_prompt_asset(name: str) -> str:
     if not text:
         raise RuntimeError(f"Prompt asset is empty: {path}")
     return text
-
-
-def infer_mode_name(tool: str) -> Optional[str]:
-    if tool in {"chat", "review-my-plan", "review-my-work"}:
-        return "caller_mutates"
-    if tool in {"work-sync", "request-mutation"}:
-        return "codex_mutates"
-    return None
 
 
 def normalize_ref_path(repo_root: Path, rel_path: str) -> Path:
@@ -1279,11 +1208,16 @@ def build_brief_user_reminder(label: str, items: list[tuple[str, str]], stage_na
     if not items:
         return ""
     active = ", ".join(title for title, _body in items)
+    emphasis_lines: list[str] = []
+    for title, body in items:
+        if "Mutation Permission" in title:
+            emphasis_lines.append(f"- {body}")
     return (
         f"The configured {label} still applies.\n"
         f"Current stage: {stage_name}.\n"
         f"Active reminder fields: {active}.\n"
-        "Do not drift from that configured reminder just because the full text is omitted in this turn."
+        + ("\n".join(emphasis_lines) + "\n" if emphasis_lines else "")
+        + "Do not drift from that configured reminder just because the full text is omitted in this turn."
     )
 
 
@@ -1304,22 +1238,22 @@ def build_codex_skill_reminder_text_for_codex(
             "if a real unresolved disagreement between you and the caller has persisted for about 10 turns."
         ),
         "review-my-plan": (
-            "caller-mutates hard gate. Review the plan before mutation, do not mutate, and judge from facts and whole-system coherence. "
+            "Hard gate. Review the plan before any mutation, do not mutate in this turn, and judge from facts and whole-system coherence. "
             "The first non-empty line must be approved_to_mutate: true or approved_to_mutate: false, followed by ## Plan Review Reply. "
             "Do not ask for user input unless a real unresolved disagreement between you and the caller has persisted for about 10 turns."
         ),
         "review-my-work": (
-            "caller-mutates hard gate. Review the actual work, not intent; do not mutate. "
+            "Hard gate. Review the actual work, not intent; do not mutate in this turn. "
             "The first non-empty line must be approved_work: true or approved_work: false, followed by ## Work Review Reply. "
             "Do not ask for user input unless a real unresolved disagreement between you and the caller has persisted for about 10 turns."
         ),
         "work-sync": (
-            "codex-mutates sync turn only. Discussion, disagreement handling, candidate plan formation, or response to caller review are allowed; mutation is not. "
+            "Sync turn only. Discussion, disagreement handling, candidate plan formation, or response to caller review are allowed; mutation is not. "
             "Return ## Discussion Reply, and add ## Plan only when a candidate plan is genuinely ready. "
             "Do not ask for user input unless a real unresolved disagreement between you and the caller has persisted for about 10 turns."
         ),
         "request-mutation": (
-            "codex-mutates mutation turn. Perform only the approved step, do not widen scope, then stop and report what changed, what you verified, what concerns remain, and where you stopped. "
+            "Mutation turn for a mutate-capable channel. Perform only the approved step, do not widen scope, then stop and report what changed, what you verified, what concerns remain, and where you stopped. "
             "Do not ask the user directly."
         ),
     }
@@ -1329,28 +1263,28 @@ def build_codex_skill_reminder_text_for_codex(
 def build_codex_skill_reminder_text_for_caller(tool: str, *, full: bool) -> str:
     full_map = {
         "init": (
-            "Run init on every new shared task, after compact/context clear, and whenever mutation ownership reverses. "
-            "Init is collaboration bootstrap only. It is not session management, not discussion, and not mutation."
+            "Run init on every new shared task and after compact/context clear when you need to re-bootstrap shared context. "
+            "Init is collaboration bootstrap only. It is not discussion and not mutation."
         ),
         "chat": (
-            "This is caller-mutates discussion only. Do not treat chat as plan approval or mutation permission. "
+            "This is discussion only. Do not treat chat as plan approval or mutation permission. "
             "Keep pushing for real consensus, and do not stop for user input unless a real unresolved caller/Codex disagreement has persisted for about 10 turns."
         ),
         "review-my-plan": (
-            "This is the caller-mutates hard gate before the caller mutates. Submit a concrete plan, require direct fact-checking, and do not treat mere discussion as approval. "
+            "This is the hard gate before any approved mutation step begins. Submit a concrete plan, require direct fact-checking, and do not treat mere discussion as approval. "
             "Do not ask the user just because execution feels uncertain; escalate only when a real unresolved caller/Codex disagreement has persisted for about 10 turns."
         ),
         "review-my-work": (
-            "This is the caller-mutates hard gate before delivery. Review actual work, evidence, and coherence. "
+            "This is the hard gate before delivery. Review actual work, evidence, and coherence. "
             "approved_work: true accepts only the reviewed step, not automatically the whole larger plan; if more agreed steps remain, continue directly to the next step instead of stopping. "
             "Do not ask the user just because next execution steps are undecided; escalate only when a real unresolved caller/Codex disagreement has persisted for about 10 turns."
         ),
         "work-sync": (
-            "This is the codex-mutates non-mutation sync turn. Use it for discussion, disagreement, candidate plans, and response to review. "
+            "This is the non-mutation sync turn. Use it for discussion, disagreement, candidate plans, and response to review. "
             "It is not mutation permission. Escalate to the user only for a real unresolved caller/Codex disagreement that has persisted for about 10 turns."
         ),
         "request-mutation": (
-            "This is the only codex-mutates mutation permission turn. Approve exactly one concrete step, then expect Codex to stop and report back. "
+            "This is the mutation permission turn for the selected mutate-capable channel. Approve exactly one concrete step, then expect Codex to stop and report back. "
             "Do not ask the user about whether to continue execution unless a real unresolved caller/Codex disagreement has persisted for about 10 turns."
         ),
         "configure": (
@@ -1366,7 +1300,7 @@ def build_codex_skill_reminder_text_for_caller(tool: str, *, full: bool) -> str:
         "review-my-plan": "Hard gate before mutation. Full Codex Skill reminder still applies. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
         "review-my-work": "Hard gate before delivery. approved_work: true accepts only the reviewed step; if more agreed steps remain, continue instead of stopping. Full Codex Skill reminder still applies. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
         "work-sync": "Sync only. No mutation permission. Full Codex Skill reminder still applies. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
-        "request-mutation": "Single approved mutation step only. Full Codex Skill reminder still applies.",
+        "request-mutation": "Single approved mutation step on a mutate-capable channel only. Full Codex Skill reminder still applies.",
         "configure": "Config update only. Full Codex Skill reminder still applies.",
         "dangerous-new-session": "Destructive continuity replacement. Full Codex Skill reminder still applies.",
     }
@@ -1396,18 +1330,10 @@ def build_common_stage_items(
 ) -> list[tuple[str, str]]:
     items: list[tuple[str, str]] = []
     stage_name = tool
-    mode_name = infer_mode_name(tool)
 
     shared_stage_text = config.shared_stages.get(stage_name)
     if shared_stage_text:
         items.append(("Shared Stage Guidance", shared_stage_text))
-
-    if mode_name is not None:
-        mode_config = config.work_modes.get(mode_name)
-        if mode_config is not None:
-            mode_stage_text = mode_config.stages.get(stage_name)
-            if mode_stage_text:
-                items.append(("Workflow Stage Guidance", mode_stage_text))
 
     return items
 
@@ -1426,6 +1352,16 @@ def build_caller_user_items(
         items.append(("Caller Working Style", config.caller.working_style))
     if config.caller.extra_context:
         items.append(("Caller Extra Context", config.caller.extra_context))
+    items.append(
+        (
+            "Caller Mutation Permission",
+            (
+                "The caller is allowed to mutate directly when appropriate."
+                if config.caller.can_mutate
+                else "The caller is not allowed to mutate directly and must route implementation through a mutate-capable channel."
+            ),
+        )
+    )
 
     caller_stage_text = config.caller.stage_guidance.get(stage_name)
     if caller_stage_text:
@@ -1451,6 +1387,16 @@ def build_agent_user_items(
         items.append(("Agent Baseline", agent.baseline))
     if agent.extra_context:
         items.append(("Agent Extra Context", agent.extra_context))
+    items.append(
+        (
+            "Channel Mutation Permission",
+            (
+                "This channel may mutate when the workflow explicitly reaches the mutation entrypoint."
+                if agent.can_mutate
+                else "This channel must not mutate files. It may discuss, review, or plan, but implementation must be routed elsewhere."
+            ),
+        )
+    )
 
     agent_stage_text = agent.stage_guidance.get(stage_name)
     if agent_stage_text:
@@ -1560,18 +1506,10 @@ def build_init_prompt(
 ) -> tuple[str, str]:
     payload = parse_init_payload(stdin_text)
     if payload.mode == "task":
-        prompt_name = (
-            "init-task-caller.md"
-            if payload.mutation_owner == INIT_MUTATION_OWNER_CALLER
-            else "init-task-codex.md"
-        )
+        prompt_name = "init-task.md"
         label = "Task background from the caller:"
     else:
-        prompt_name = (
-            "init-recovery-caller.md"
-            if payload.mutation_owner == INIT_MUTATION_OWNER_CALLER
-            else "init-recovery-codex.md"
-        )
+        prompt_name = "init-recovery.md"
         label = "Recovery background from the caller:"
 
     prompt = compose_prompt(
@@ -2019,7 +1957,6 @@ def persist_agents_for_command(
             version=CONFIG_VERSION,
             caller=config.caller,
             shared_stages=config.shared_stages,
-            work_modes=config.work_modes,
             agents=upsert_agent(config.agents, replace(agent, updated_at=iso_now())),
             updated_at=iso_now(),
         ),
@@ -2289,8 +2226,6 @@ def main() -> int:
             lines.append("Updated: caller")
         if payload.shared_stages_patch is not None:
             lines.append("Updated: shared_stages")
-        if payload.work_modes_patch is not None:
-            lines.append("Updated: work_modes")
         if payload.agents_patch is not None:
             lines.append(
                 "Updated agents: " + ", ".join(patch["name"] for patch in payload.agents_patch)
@@ -2360,6 +2295,7 @@ def main() -> int:
                 baseline=agent.baseline,
                 extra_context=agent.extra_context,
                 stage_guidance=agent.stage_guidance,
+                can_mutate=agent.can_mutate,
                 session_id=current_session_id,
                 model=effective_model,
                 reasoning_effort=effective_reasoning_effort,
@@ -2418,6 +2354,18 @@ def main() -> int:
     init_mode: Optional[str] = None
     turn_index = collaborative_turn_index(args.cmd, agent)
     full_reminder = should_use_full_reminder(args.cmd, turn_index)
+
+    if args.cmd == "request-mutation" and not agent.can_mutate:
+        eprint(
+            "\n".join(
+                [
+                    f"Channel '{agent.name}' is configured with can_mutate: false.",
+                    "request-mutation is only allowed for a mutate-capable channel.",
+                    "Choose a different channel or update the channel config through configure.",
+                ]
+            )
+        )
+        return 1
 
     try:
         if args.cmd == "init":
