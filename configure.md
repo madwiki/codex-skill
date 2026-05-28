@@ -1,6 +1,6 @@
 # configure
 
-Use this command when the caller needs to update the managed config instead of editing `.claude/codex_agents.json` by hand.
+Use this command when the caller needs to update the managed config instead of editing `.codex-skill/codex_agents.json` by hand.
 
 This command does **not** mutate task files and does **not** change current session continuity by itself.
 

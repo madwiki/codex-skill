@@ -63,11 +63,13 @@ SANDBOX_DANGER_FULL_ACCESS = "danger-full-access"
 AGENTS_FILENAME = "codex_agents.json"
 LEGACY_SESSION_FILENAME = "codex_session.json"
 LEGACY_HISTORY_FILENAME = "codex_session_history.json"
+MANAGED_DIRNAME = ".codex-skill"
+LEGACY_MANAGED_DIRNAME = ".claude"
 DEFAULT_AGENT_NAME = "default"
 DEFAULT_AGENT_DESCRIPTION = "Primary Codex collaboration channel."
 MIGRATED_AGENT_DESCRIPTION = "Migrated primary Codex collaboration channel."
 CONFIG_VERSION = 4
-REF_DIRECTORY = ".claude/codex-skill-refs"
+REF_DIRECTORY = f"{MANAGED_DIRNAME}/refs"
 REF_PATTERN = re.compile(r"\[\[REF:(?P<path>[^:\]]+?)(?:::(?P<locator>[^\]]+))?\]\]")
 
 TOOL_HELP = {
@@ -86,14 +88,16 @@ def eprint(*args: object) -> None:
     print(*args, file=sys.stderr)
 
 
-CLAUDE_GLOBAL_DIR = (Path.home() / ".claude").resolve()
+CLAUDE_GLOBAL_DIR = (Path.home() / LEGACY_MANAGED_DIRNAME).resolve()
+MANAGED_GLOBAL_DIR = (Path.home() / MANAGED_DIRNAME).resolve()
 
 
-def is_global_claude_dir(claude_dir: Path) -> bool:
+def is_global_managed_dir(directory: Path) -> bool:
     try:
-        return claude_dir.resolve() == CLAUDE_GLOBAL_DIR
+        resolved = directory.resolve()
+        return resolved in {CLAUDE_GLOBAL_DIR, MANAGED_GLOBAL_DIR}
     except Exception:
-        return str(claude_dir) == str(CLAUDE_GLOBAL_DIR)
+        return str(directory) in {str(CLAUDE_GLOBAL_DIR), str(MANAGED_GLOBAL_DIR)}
 
 
 def iter_ancestors(start: Path) -> Iterator[Path]:
@@ -111,31 +115,35 @@ def find_session_root(start: Path) -> Optional[Path]:
     file.
 
     IMPORTANT:
-    - Never treat the global ~/.claude directory as a project root.
-    - `.claude/codex_agents.json` is the stable anchor.
-    - `.claude/codex_session.json` is still accepted only as a legacy anchor so the wrapper can
-      migrate it once into the new structured config.
-    - `.claude/` alone can exist at many levels for other purposes (local guidelines), so we do
-      not auto-pick based on `.claude/` alone.
+    - Never treat the global ~/.claude or ~/.codex-skill directory as a project root.
+    - `.codex-skill/codex_agents.json` is the stable anchor.
+    - `.claude/codex_agents.json` and `.claude/codex_session.json` are accepted only as legacy anchors so the wrapper can
+      migrate them into the new structured config location.
+    - `.codex-skill/` or `.claude/` alone can exist at many levels for other purposes, so we do
+      not auto-pick based on the directory alone.
     """
     for p in iter_ancestors(start):
-        claude_dir = p / ".claude"
-        if is_global_claude_dir(claude_dir):
+        managed_dir = p / MANAGED_DIRNAME
+        legacy_dir = p / LEGACY_MANAGED_DIRNAME
+        if is_global_managed_dir(managed_dir) or is_global_managed_dir(legacy_dir):
             continue
-        if (claude_dir / AGENTS_FILENAME).is_file():
+        if (managed_dir / AGENTS_FILENAME).is_file():
             return p
-        if (claude_dir / LEGACY_SESSION_FILENAME).is_file():
+        if (legacy_dir / AGENTS_FILENAME).is_file():
+            return p
+        if (legacy_dir / LEGACY_SESSION_FILENAME).is_file():
             return p
     return None
 
 
-def candidate_roots_with_claude_dir(start: Path, limit: int = 5) -> list[Path]:
+def candidate_roots_with_managed_dir(start: Path, limit: int = 5) -> list[Path]:
     candidates: list[Path] = []
     for p in iter_ancestors(start):
-        claude_dir = p / ".claude"
-        if is_global_claude_dir(claude_dir):
+        managed_dir = p / MANAGED_DIRNAME
+        legacy_dir = p / LEGACY_MANAGED_DIRNAME
+        if is_global_managed_dir(managed_dir) or is_global_managed_dir(legacy_dir):
             continue
-        if claude_dir.is_dir():
+        if managed_dir.is_dir() or legacy_dir.is_dir():
             candidates.append(p)
             if len(candidates) >= limit:
                 break
@@ -143,15 +151,19 @@ def candidate_roots_with_claude_dir(start: Path, limit: int = 5) -> list[Path]:
 
 
 def agents_file_path(repo_root: Path) -> Path:
-    return repo_root / ".claude" / AGENTS_FILENAME
+    return repo_root / MANAGED_DIRNAME / AGENTS_FILENAME
+
+
+def legacy_agents_file_path(repo_root: Path) -> Path:
+    return repo_root / LEGACY_MANAGED_DIRNAME / AGENTS_FILENAME
 
 
 def legacy_session_file_path(repo_root: Path) -> Path:
-    return repo_root / ".claude" / LEGACY_SESSION_FILENAME
+    return repo_root / LEGACY_MANAGED_DIRNAME / LEGACY_SESSION_FILENAME
 
 
 def legacy_session_history_file_path(repo_root: Path) -> Path:
-    return repo_root / ".claude" / LEGACY_HISTORY_FILENAME
+    return repo_root / LEGACY_MANAGED_DIRNAME / LEGACY_HISTORY_FILENAME
 
 
 def iso_now() -> str:
@@ -500,6 +512,7 @@ def migrate_agents_config_to_latest(
     default_reasoning_effort: Optional[str],
 ) -> Optional[str]:
     config_path = agents_file_path(repo_root)
+    legacy_config_path = legacy_agents_file_path(repo_root)
     if config_path.exists():
         try:
             data = json.loads(config_path.read_text(encoding="utf-8"))
@@ -530,6 +543,31 @@ def migrate_agents_config_to_latest(
             )
         raise RuntimeError(f"Agent config file must contain a JSON object or legacy JSON array: {config_path}")
 
+    if legacy_config_path.exists():
+        try:
+            data = json.loads(legacy_config_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Invalid agent config JSON in {legacy_config_path}: {exc.msg}") from exc
+        if isinstance(data, dict):
+            migrated = parse_skill_config_object(data, path=legacy_config_path)
+            write_skill_config(
+                repo_root,
+                replace(migrated, version=CONFIG_VERSION, updated_at=iso_now()),
+            )
+            return (
+                "Legacy config location was migrated from "
+                f"{legacy_config_path} to {config_path}. Structural keys were normalized automatically when needed. "
+                "User-authored reminder text was left unchanged."
+            )
+        if isinstance(data, list):
+            migrated = default_skill_config([parse_agent_config(item) for item in data])
+            write_skill_config(repo_root, migrated)
+            return (
+                "Legacy array-based agent config location was migrated from "
+                f"{legacy_config_path} to {config_path}."
+            )
+        raise RuntimeError(f"Agent config file must contain a JSON object or legacy JSON array: {legacy_config_path}")
+
     legacy_session_id = read_legacy_session_id(repo_root)
     legacy_history = read_legacy_session_history(repo_root)
     if legacy_session_id is None and not legacy_history:
@@ -545,8 +583,8 @@ def migrate_agents_config_to_latest(
     )
     write_skill_config(repo_root, default_skill_config([migrated]))
     return (
-        "Legacy single-session config was migrated to "
-        f"{agents_file_path(repo_root)} as agent '{DEFAULT_AGENT_NAME}'."
+        "Legacy single-session config was migrated from "
+        f"{legacy_session_file_path(repo_root)} to {agents_file_path(repo_root)} as agent '{DEFAULT_AGENT_NAME}'."
     )
 
 
@@ -2144,7 +2182,7 @@ def main() -> int:
     parser.add_argument(
         "--agent",
         default=DEFAULT_AGENT_NAME,
-        help="Target agent name inside .claude/codex_agents.json (default: default).",
+        help=f"Target agent name inside {MANAGED_DIRNAME}/{AGENTS_FILENAME} (default: default).",
     )
     parser.add_argument("--timeout-s", type=int, default=3600, help="codex exec timeout in seconds.")
     parser.add_argument("--model", default=None, help="Optional model override for this call.")
@@ -2167,28 +2205,30 @@ def main() -> int:
     if repo_root is None:
         if cwd_explicit:
             chosen = start_cwd.expanduser().resolve()
-            chosen_claude_dir = chosen / ".claude"
-            if not is_global_claude_dir(chosen_claude_dir):
+            chosen_managed_dir = chosen / MANAGED_DIRNAME
+            chosen_legacy_dir = chosen / LEGACY_MANAGED_DIRNAME
+            if not is_global_managed_dir(chosen_managed_dir) and not is_global_managed_dir(chosen_legacy_dir):
                 repo_root = chosen
 
     if repo_root is None:
-        candidates = candidate_roots_with_claude_dir(start_cwd)
+        candidates = candidate_roots_with_managed_dir(start_cwd)
         lines = [
             "No project Codex session root is configured.",
             "Could not find an existing managed session anchor:",
-            f"  - <dir>/.claude/{AGENTS_FILENAME}",
-            f"  - <dir>/.claude/{LEGACY_SESSION_FILENAME} (legacy, auto-migrated once)",
-            f"(excluding the global ~/.claude directory: {CLAUDE_GLOBAL_DIR}).",
+            f"  - <dir>/{MANAGED_DIRNAME}/{AGENTS_FILENAME}",
+            f"  - <dir>/{LEGACY_MANAGED_DIRNAME}/{AGENTS_FILENAME} (legacy, auto-migrated once)",
+            f"  - <dir>/{LEGACY_MANAGED_DIRNAME}/{LEGACY_SESSION_FILENAME} (legacy, auto-migrated once)",
+            f"(excluding the global {MANAGED_GLOBAL_DIR} and {CLAUDE_GLOBAL_DIR} directories).",
             "",
             "Ask the user to choose a directory to store the Codex session for this workspace.",
         ]
         if candidates:
-            lines.append("Candidate directories that already contain a .claude/ directory (closest first):")
+            lines.append(f"Candidate directories that already contain a {MANAGED_DIRNAME}/ or {LEGACY_MANAGED_DIRNAME}/ directory (closest first):")
             for c in candidates:
                 lines.append(f"  - {c}")
             lines.append("Then rerun this command with: --cwd <chosen_dir>")
         else:
-            lines.append("No .claude/ directory was found in parent directories (excluding the global one).")
+            lines.append(f"No {MANAGED_DIRNAME}/ or {LEGACY_MANAGED_DIRNAME}/ directory was found in parent directories (excluding the global ones).")
             lines.append("Ask the user to choose a directory, then rerun this command with: --cwd <chosen_dir>.")
         raise RuntimeError("\n".join(lines))
 
@@ -2204,7 +2244,7 @@ def main() -> int:
         try:
             payload = parse_configure_payload(stdin_text)
             repo_root.mkdir(parents=True, exist_ok=True)
-            (repo_root / ".claude").mkdir(parents=True, exist_ok=True)
+            (repo_root / MANAGED_DIRNAME).mkdir(parents=True, exist_ok=True)
             config, _agent, migration_notice = resolve_agents_for_command(
                 repo_root,
                 agent_name,
@@ -2246,7 +2286,7 @@ def main() -> int:
         try:
             payload = parse_dangerous_new_session_payload(stdin_text)
             repo_root.mkdir(parents=True, exist_ok=True)
-            (repo_root / ".claude").mkdir(parents=True, exist_ok=True)
+            (repo_root / MANAGED_DIRNAME).mkdir(parents=True, exist_ok=True)
             config, agent, migration_notice = resolve_agents_for_command(
                 repo_root,
                 agent_name,

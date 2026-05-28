@@ -2,7 +2,7 @@
 
 Use this as the collaboration bootstrap entrypoint.
 
-Session continuity is wrapper-managed. The caller must use wrapper commands and must not call raw `codex` directly or manually edit/delete `<repo>/.claude/codex_agents.json`.
+Session continuity is wrapper-managed. The caller must use wrapper commands and must not call raw `codex` directly or manually edit/delete `<repo>/.codex-skill/codex_agents.json`.
 
 `init` may target a specific managed channel with `--agent <name>`. If that channel does not exist yet, the wrapper creates it automatically and persists it in the structured managed config.
 

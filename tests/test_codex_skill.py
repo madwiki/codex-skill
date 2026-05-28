@@ -14,6 +14,8 @@ SCRIPT = ROOT / "bin" / "codex_skill.py"
 AGENTS_FILENAME = "codex_agents.json"
 LEGACY_SESSION_FILENAME = "codex_session.json"
 LEGACY_HISTORY_FILENAME = "codex_session_history.json"
+MANAGED_DIRNAME = ".codex-skill"
+LEGACY_DIRNAME = ".claude"
 
 FAKE_CODEX_SOURCE = textwrap.dedent(
     """\
@@ -126,6 +128,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         *,
         agent_name: str = "default",
         initial_config: Optional[dict] = None,
+        initial_legacy_config: Optional[dict] = None,
         initial_agents: Optional[list[dict]] = None,
         legacy_session_id: Optional[str] = None,
         legacy_history_ids: Optional[list[str]] = None,
@@ -137,9 +140,11 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
             workspace = tmp / "workspace"
-            claude_dir = workspace / ".claude"
-            claude_dir.mkdir(parents=True)
-            (claude_dir / "codex-skill-refs").mkdir(parents=True, exist_ok=True)
+            managed_dir = workspace / MANAGED_DIRNAME
+            legacy_dir = workspace / LEGACY_DIRNAME
+            managed_dir.mkdir(parents=True)
+            legacy_dir.mkdir(parents=True)
+            (managed_dir / "refs").mkdir(parents=True, exist_ok=True)
 
             if ref_files:
                 for rel_path, content in ref_files.items():
@@ -148,24 +153,29 @@ class CodexSkillIntegrationTests(unittest.TestCase):
                     path.write_text(content, encoding="utf-8")
 
             if initial_config is not None:
-                (claude_dir / AGENTS_FILENAME).write_text(
+                (managed_dir / AGENTS_FILENAME).write_text(
                     json.dumps(initial_config, ensure_ascii=False, indent=2) + "\n",
                     encoding="utf-8",
                 )
+            if initial_legacy_config is not None:
+                (legacy_dir / AGENTS_FILENAME).write_text(
+                    json.dumps(initial_legacy_config, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
             elif initial_agents is not None:
-                (claude_dir / AGENTS_FILENAME).write_text(
+                (managed_dir / AGENTS_FILENAME).write_text(
                     json.dumps(self.build_config(initial_agents), ensure_ascii=False, indent=2) + "\n",
                     encoding="utf-8",
                 )
 
             if legacy_session_id is not None:
-                (claude_dir / LEGACY_SESSION_FILENAME).write_text(
+                (legacy_dir / LEGACY_SESSION_FILENAME).write_text(
                     json.dumps({"session_id": legacy_session_id}, ensure_ascii=False, indent=2) + "\n",
                     encoding="utf-8",
                 )
 
             if legacy_history_ids is not None:
-                (claude_dir / LEGACY_HISTORY_FILENAME).write_text(
+                (legacy_dir / LEGACY_HISTORY_FILENAME).write_text(
                     json.dumps({"previous_session_ids": legacy_history_ids}, ensure_ascii=False, indent=2) + "\n",
                     encoding="utf-8",
                 )
@@ -203,14 +213,14 @@ class CodexSkillIntegrationTests(unittest.TestCase):
             if capture_path.exists():
                 capture = json.loads(capture_path.read_text(encoding="utf-8"))
 
-            agents_path = claude_dir / AGENTS_FILENAME
+            agents_path = managed_dir / AGENTS_FILENAME
             state = {
                 "agents_exists": agents_path.exists(),
                 "agents_payload": (
                     json.loads(agents_path.read_text(encoding="utf-8")) if agents_path.exists() else None
                 ),
-                "legacy_session_exists": (claude_dir / LEGACY_SESSION_FILENAME).exists(),
-                "legacy_history_exists": (claude_dir / LEGACY_HISTORY_FILENAME).exists(),
+                "legacy_session_exists": (legacy_dir / LEGACY_SESSION_FILENAME).exists(),
+                "legacy_history_exists": (legacy_dir / LEGACY_HISTORY_FILENAME).exists(),
             }
             return proc, capture, state
 
@@ -305,14 +315,14 @@ class CodexSkillIntegrationTests(unittest.TestCase):
             "review-my-plan",
             '{"plan_for_review":"Review the current plan."}',
             "approved_to_mutate: true\n\n## Plan Review Reply\n\nLooks acceptable.",
-            initial_config=legacy_config,
+            initial_legacy_config=legacy_config,
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         assert capture is not None
         self.assertIn("resume", capture["argv"])
         self.assertIn("legacy-structured-session", capture["argv"])
         self.assertIn("Migration notice:", proc.stdout)
-        self.assertIn("Legacy structured config was migrated to version 4", proc.stdout)
+        self.assertIn("Legacy config location was migrated from", proc.stdout)
         self.assertIn("User-authored reminder text was left unchanged.", proc.stdout)
         payload = state["agents_payload"]
         assert payload is not None
@@ -399,19 +409,19 @@ class CodexSkillIntegrationTests(unittest.TestCase):
     def test_prompt_includes_config_sections_and_ref_notice(self) -> None:
         proc, capture, _state = self.run_skill(
             "review-my-plan",
-            '{"plan_for_review":"Review the plan against [[REF:.claude/codex-skill-refs/rules.md::Rule 5]]."}',
+            '{"plan_for_review":"Review the plan against [[REF:.codex-skill/refs/rules.md::Rule 5]]."}',
             "approved_to_mutate: true\n\n## Plan Review Reply\n\nLooks acceptable.",
             initial_agents=[
                 self.build_agent(
                     "default",
                     session_id="existing-session",
-                    focus="Watch for drift against [[REF:.claude/codex-skill-refs/rules.md::Rule 5]].",
+                    focus="Watch for drift against [[REF:.codex-skill/refs/rules.md::Rule 5]].",
                     baseline="Keep the original requirements stable.",
-                    stage_guidance={"review-my-plan": "Use [[REF:.claude/codex-skill-refs/rules.md::Rule 10]]."},
+                    stage_guidance={"review-my-plan": "Use [[REF:.codex-skill/refs/rules.md::Rule 10]]."},
                 )
             ],
             ref_files={
-                ".claude/codex-skill-refs/rules.md": "# Rules\n\nRule 5\nRule 10\n",
+                ".codex-skill/refs/rules.md": "# Rules\n\nRule 5\nRule 10\n",
             },
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -419,7 +429,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         self.assertIn("## Codex Skill Reminder (Full)", capture["stdin"])
         self.assertIn("## User Reminder (Full)", capture["stdin"])
         self.assertIn("## Reference Handling Notice", capture["stdin"])
-        self.assertIn("[[REF:.claude/codex-skill-refs/rules.md::Rule 5]]", capture["stdin"])
+        self.assertIn("[[REF:.codex-skill/refs/rules.md::Rule 5]]", capture["stdin"])
         self.assertIn("### Agent Focus", capture["stdin"])
         self.assertIn("### Agent Stage Guidance", capture["stdin"])
 
@@ -517,7 +527,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
     def test_missing_ref_file_fails_the_call(self) -> None:
         proc, _capture, _state = self.run_skill(
             "chat",
-            '{"message_for_codex":"Please keep [[REF:.claude/codex-skill-refs/missing.md::Rule 2]] in mind."}',
+            '{"message_for_codex":"Please keep [[REF:.codex-skill/refs/missing.md::Rule 2]] in mind."}',
             initial_agents=[self.build_agent("default", session_id="existing-session")],
         )
         self.assertNotEqual(proc.returncode, 0)

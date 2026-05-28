@@ -9,11 +9,11 @@ description: >
 
 This skill is caller-agnostic. The caller may be Claude Code, Codex, OpenCode, or another tool that invokes the wrapper commands. Codex does not speak to the end user directly. The caller remains responsible for user-facing conversation and for asking the user to decide unresolved issues.
 
-Session continuity is wrapper-managed. Use only `bin/codex-skill-*` commands. Do not call raw `codex` directly. Do not manually edit, delete, or replace `<repo>/.claude/codex_agents.json`.
+Session continuity is wrapper-managed. Use only `bin/codex-skill-*` commands. Do not call raw `codex` directly. Do not manually edit, delete, or replace `<repo>/.codex-skill/codex_agents.json`.
 
 ## Managed config
 
-The managed config lives at `<repo>/.claude/codex_agents.json`.
+The managed config lives at `<repo>/.codex-skill/codex_agents.json`.
 
 Top-level fields:
 
@@ -67,7 +67,7 @@ Use the unified format `[[REF:<relative-path>]]` or `[[REF:<relative-path>::<loc
 - The wrapper never inlines referenced files automatically.
 - If continuity loss means Codex cannot confidently identify the referenced source and relevant content, Codex must re-read the referenced file before relying on it.
 
-`.claude/codex-skill-refs/` is the conventional place for long Codex Skill reference documents, but any workspace file may be referenced with the same syntax.
+`.codex-skill/refs/` is the conventional place for long Codex Skill reference documents, but any workspace file may be referenced with the same syntax.
 
 ## Review and disagreement discipline
 

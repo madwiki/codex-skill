@@ -23,7 +23,7 @@ git clone https://github.com/madwiki/codex-skill ~/.claude/skills/codex-skill
 
 The managed config lives at:
 
-`<repo>/.claude/codex_agents.json`
+`<repo>/.codex-skill/codex_agents.json`
 
 Top-level keys:
 

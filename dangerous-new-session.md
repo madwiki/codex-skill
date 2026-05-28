@@ -4,7 +4,7 @@ Use this only when the user explicitly wants to abandon the selected Codex agent
 
 This is a dangerous command by design. Do not use it just because resume failed, the current session looks confusing, or the caller wants a clean slate. Only use it after the user explicitly asks for a fresh start, replacement, reset, switch, or continuity break.
 
-The caller must not call raw `codex` directly and must not manually edit, delete, or replace `<repo>/.claude/codex_agents.json`.
+The caller must not call raw `codex` directly and must not manually edit, delete, or replace `<repo>/.codex-skill/codex_agents.json`.
 
 This command may target a specific managed agent with `--agent <name>`. When omitted, it operates on the `default` agent.
 
