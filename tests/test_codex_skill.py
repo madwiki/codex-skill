@@ -22,14 +22,29 @@ FAKE_CODEX_SOURCE = textwrap.dedent(
     #!/usr/bin/env python3
     import json
     import os
+    import time
     import sys
     from pathlib import Path
 
     args = sys.argv[1:]
     reply = os.environ["FAKE_CODEX_REPLY"]
     forced_error = os.environ.get("FAKE_CODEX_ERROR")
+    reply_map = json.loads(os.environ.get("FAKE_CODEX_REPLY_MAP", "{}"))
+    error_map = json.loads(os.environ.get("FAKE_CODEX_ERROR_MAP", "{}"))
+    session_map = json.loads(os.environ.get("FAKE_CODEX_SESSION_MAP", "{}"))
+    sleep_s = float(os.environ.get("FAKE_CODEX_SLEEP_S", "0"))
     capture_path = os.environ.get("FAKE_CODEX_CAPTURE")
     stdin_text = sys.stdin.read()
+
+    for key, mapped_reply in reply_map.items():
+        if key in stdin_text:
+            reply = mapped_reply
+            break
+
+    for key, mapped_error in error_map.items():
+        if key in stdin_text:
+            forced_error = mapped_error
+            break
 
     if capture_path:
         Path(capture_path).write_text(
@@ -51,12 +66,20 @@ FAKE_CODEX_SOURCE = textwrap.dedent(
         print(forced_error, file=sys.stderr)
         sys.exit(1)
 
+    if sleep_s > 0:
+        time.sleep(sleep_s)
+
     session_id = "test-session"
     if "resume" in args:
         try:
             session_id = args[args.index("resume") + 1]
         except Exception:
             session_id = "test-session"
+    else:
+        for key, mapped_session_id in session_map.items():
+            if key in stdin_text:
+                session_id = mapped_session_id
+                break
 
     Path(out_path).write_text(reply, encoding="utf-8")
     print(json.dumps({"type": "session_meta", "payload": {"id": session_id, "originator": "codex_exec", "source": "exec"}}))
@@ -648,6 +671,133 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("can_mutate: false", proc.stderr)
         self.assertIn("mutate-capable cxsk_channel", proc.stderr)
+
+    def test_invoke_fanout_returns_settled_results_and_updates_channels(self) -> None:
+        payload = json.dumps(
+            {
+                "requests": [
+                    {
+                        "command": "review-this-plan",
+                        "cxsk_channel": "reviewer-a",
+                        "input": {"plan_for_review": "Plan A"},
+                    },
+                    {
+                        "command": "review-this-plan",
+                        "cxsk_channel": "reviewer-b",
+                        "input": {"plan_for_review": "Plan B"},
+                    },
+                ]
+            },
+            ensure_ascii=False,
+        )
+        proc, _capture, state = self.run_skill(
+            "invoke",
+            payload,
+            initial_cxsk_channels=[
+                self.build_cxsk_channel("reviewer-a", can_mutate=False),
+                self.build_cxsk_channel("reviewer-b", can_mutate=False),
+            ],
+            env_extra={
+                "FAKE_CODEX_REPLY_MAP": json.dumps(
+                    {
+                        "Plan A": "approved_to_mutate: true\n\n## Plan Review Reply\n\nReviewer A approves.",
+                        "Plan B": "approved_to_mutate: false\n\n## Plan Review Reply\n\nReviewer B blocks.",
+                    },
+                    ensure_ascii=False,
+                ),
+                "FAKE_CODEX_SESSION_MAP": json.dumps(
+                    {"Plan A": "session-a", "Plan B": "session-b"},
+                    ensure_ascii=False,
+                ),
+            },
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("## Invoke Summary", proc.stdout)
+        self.assertIn("reviewer-a · review-this-plan · ok", proc.stdout)
+        self.assertIn("reviewer-b · review-this-plan · ok", proc.stdout)
+        self.assertIn("Execution mode: concurrent read-only fanout", proc.stdout)
+        self.assertIn("do not wrap these calls in external polling", proc.stdout)
+        reviewer_a = self.find_cxsk_channel(state, "reviewer-a")
+        reviewer_b = self.find_cxsk_channel(state, "reviewer-b")
+        self.assertEqual(reviewer_a["session_id"], "session-a")
+        self.assertEqual(reviewer_b["session_id"], "session-b")
+        self.assertEqual(reviewer_a["reminder_turn_count"], 1)
+        self.assertEqual(reviewer_b["reminder_turn_count"], 1)
+
+    def test_invoke_reports_partial_failures_without_failing_fast(self) -> None:
+        payload = json.dumps(
+            {
+                "requests": [
+                    {
+                        "command": "sync",
+                        "cxsk_channel": "planner",
+                        "input": {"sync_message": "to planner"},
+                    },
+                    {
+                        "command": "review-this-plan",
+                        "cxsk_channel": "reviewer-a",
+                        "input": {"plan_for_review": "Broken Plan"},
+                    },
+                ]
+            },
+            ensure_ascii=False,
+        )
+        proc, _capture, state = self.run_skill(
+            "invoke",
+            payload,
+            initial_cxsk_channels=[
+                self.build_cxsk_channel("planner", can_mutate=False),
+                self.build_cxsk_channel("reviewer-a", can_mutate=False),
+            ],
+            env_extra={
+                "FAKE_CODEX_REPLY_MAP": json.dumps(
+                    {
+                        "to planner": "## Discussion Reply\n\nPlanner sync succeeded.",
+                    },
+                    ensure_ascii=False,
+                ),
+                "FAKE_CODEX_ERROR_MAP": json.dumps(
+                    {"Broken Plan": "synthetic reviewer failure"},
+                    ensure_ascii=False,
+                ),
+                "FAKE_CODEX_SESSION_MAP": json.dumps(
+                    {"to planner": "planner-session"},
+                    ensure_ascii=False,
+                ),
+            },
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("- Succeeded: 1", proc.stdout)
+        self.assertIn("- Failed: 1", proc.stdout)
+        self.assertIn("planner · sync · ok", proc.stdout)
+        self.assertIn("reviewer-a · review-this-plan · error", proc.stdout)
+        self.assertIn("synthetic reviewer failure", proc.stdout)
+        planner = self.find_cxsk_channel(state, "planner")
+        reviewer = self.find_cxsk_channel(state, "reviewer-a")
+        self.assertEqual(planner["session_id"], "planner-session")
+        self.assertIsNone(reviewer["session_id"])
+
+    def test_invoke_rejects_duplicate_channel_targets(self) -> None:
+        payload = json.dumps(
+            {
+                "requests": [
+                    {
+                        "command": "sync",
+                        "cxsk_channel": "planner",
+                        "input": {"sync_message": "first"},
+                    },
+                    {
+                        "command": "sync",
+                        "cxsk_channel": "planner",
+                        "input": {"sync_message": "second"},
+                    },
+                ]
+            },
+            ensure_ascii=False,
+        )
+        proc, _capture, _state = self.run_skill("invoke", payload)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("does not allow duplicate cxsk_channel targets", proc.stderr)
 
     def test_missing_thread_error_requires_explicit_dangerous_reset(self) -> None:
         proc, _capture, _state = self.run_skill(

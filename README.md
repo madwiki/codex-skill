@@ -42,6 +42,7 @@ Important behavior:
 ## Commands
 
 - `bin/codex-skill-init`
+- `bin/codex-skill-invoke`
 - `bin/codex-skill-sync`
 - `bin/codex-skill-review-this-plan`
 - `bin/codex-skill-review-this-work`
@@ -52,6 +53,13 @@ Important behavior:
 - `bin/codex-skill-dangerous-new-session`
 
 All commands accept optional `--cxsk-channel <name>`. When omitted, the wrapper uses the `default` cxsk_channel.
+
+Preferred calling pattern:
+
+- use `invoke` when you want one blocking wrapper call that waits for one or more cxsk_channel results
+- let `invoke` wait internally instead of wrapping raw `codex-skill-*` commands in external polling
+- if all requests are read-only, `invoke` will fan them out concurrently and return the settled results together
+- if any request mutates, `invoke` will still use one wrapper call, but it will run those requests sequentially
 
 Use:
 

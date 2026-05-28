@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 import re
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -59,6 +62,8 @@ SYNC_PLAN_TITLE = "Plan"
 SANDBOX_READ_ONLY = "read-only"
 SANDBOX_WORKSPACE_WRITE = "workspace-write"
 SANDBOX_DANGER_FULL_ACCESS = "danger-full-access"
+PROCESS_POLL_INTERVAL_S = 20
+PROCESS_IDLE_TIMEOUT_S = 600
 CXSK_CHANNELS_FILENAME = "cxsk_channels.json"
 LEGACY_SESSION_FILENAME = "codex_session.json"
 LEGACY_HISTORY_FILENAME = "codex_session_history.json"
@@ -86,6 +91,7 @@ LEGACY_STRUCTURED_FILENAMES = (
 
 TOOL_HELP = {
     "init": "Bootstrap Codex collaboration for a new task or recovery sync (reads JSON from stdin).",
+    "invoke": "Invoke one or more cxsk_channel commands through one blocking wrapper call (reads JSON from stdin).",
     "sync": "Discussion / coordination / disagreement-resolution turn (reads JSON from stdin).",
     "review-this-plan": "Codex reviews the submitted plan without mutating state (reads JSON from stdin).",
     "review-this-work": "Codex reviews submitted work without mutating state (reads JSON from stdin).",
@@ -95,6 +101,20 @@ TOOL_HELP = {
     "configure": "Patch cxsk_invoker guidance, shared guidance, or cxsk_channel metadata (reads JSON from stdin).",
     "update-config": "Normalize discoverable managed state and rewrite the canonical config (does not read JSON from stdin).",
 }
+
+INVOKE_REQUESTS_FIELD = "requests"
+INVOKE_COMMAND_FIELD = "command"
+INVOKE_INPUT_FIELD = "input"
+INVOKE_CXSK_CHANNEL_FIELD = "cxsk_channel"
+INVOKE_ALLOWED_COMMANDS = {
+    "init",
+    "sync",
+    "review-this-plan",
+    "review-this-work",
+    "execute-this-plan",
+    "execute-this-plan-part",
+}
+INVOKE_MUTATING_COMMANDS = {"execute-this-plan", "execute-this-plan-part"}
 
 
 def eprint(*args: object) -> None:
@@ -802,9 +822,73 @@ class ConfigurePayload:
     cxsk_channels_patch: Optional[list[dict[str, object]]]
 
 
+@dataclass(frozen=True)
+class InvokeRequest:
+    command: str
+    cxsk_channel_name: Optional[str]
+    stdin_text: str
+
+
+@dataclass(frozen=True)
+class InvokePayload:
+    requests: tuple[InvokeRequest, ...]
+
+
 def validate_update_config_input(stdin_text: str) -> None:
     if stdin_text.replace("\r\n", "\n").replace("\r", "\n").strip():
         raise ValueError("update-config does not accept input. Run it with empty stdin.")
+
+
+def parse_invoke_request_object(raw: object, *, index: int) -> InvokeRequest:
+    if not isinstance(raw, dict):
+        raise ValueError(f"invoke requests[{index}] must be a JSON object.")
+
+    command = normalize_optional_string(raw.get(INVOKE_COMMAND_FIELD))
+    if not command:
+        raise ValueError(f"invoke requests[{index}].command must be a non-empty string.")
+    if command not in INVOKE_ALLOWED_COMMANDS:
+        raise ValueError(
+            f"invoke requests[{index}].command must be one of: {', '.join(sorted(INVOKE_ALLOWED_COMMANDS))}."
+        )
+
+    payload = raw.get(INVOKE_INPUT_FIELD)
+    if not isinstance(payload, dict):
+        raise ValueError(f"invoke requests[{index}].input must be a JSON object.")
+
+    return InvokeRequest(
+        command=command,
+        cxsk_channel_name=normalize_optional_string(raw.get(INVOKE_CXSK_CHANNEL_FIELD)),
+        stdin_text=json.dumps(payload, ensure_ascii=False),
+    )
+
+
+def parse_invoke_payload(stdin_text: str) -> InvokePayload:
+    text = stdin_text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not text:
+        raise ValueError(
+            "invoke input is empty. Provide either a single request object or a {\"requests\": [...]} object."
+        )
+
+    try:
+        obj = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invoke input must be valid JSON: {exc.msg}") from exc
+
+    if not isinstance(obj, dict):
+        raise ValueError("invoke input must be a JSON object.")
+
+    requests_raw = obj.get(INVOKE_REQUESTS_FIELD)
+    if requests_raw is None:
+        return InvokePayload(requests=(parse_invoke_request_object(obj, index=0),))
+
+    if not isinstance(requests_raw, list) or not requests_raw:
+        raise ValueError("invoke requests must be a non-empty JSON array.")
+
+    requests = tuple(
+        parse_invoke_request_object(item, index=index)
+        for index, item in enumerate(requests_raw)
+    )
+    return InvokePayload(requests=requests)
 
 
 def parse_init_payload(stdin_text: str) -> InitPayload:
@@ -1333,6 +1417,10 @@ def build_codex_skill_reminder_text_for_invoker(tool: str, *, full: bool) -> str
             "Run init on every new shared task and after compact/context clear when you need to re-bootstrap shared context. "
             "Init is collaboration bootstrap only. It is not discussion and not mutation."
         ),
+        "invoke": (
+            "Use invoke as the preferred wrapper when coordinating one or more cxsk_channels. "
+            "Let invoke block until every requested call settles; do not wrap these calls in external polling or repeated status checks."
+        ),
         "sync": (
             "This is the general sync turn. Use it for discussion, coordination, disagreement handling, plan repair, and relaying review outcomes. "
             "Keep pushing for real consensus, and do not stop for user input unless a real unresolved cxsk_invoker/Codex disagreement has persisted for about 10 turns."
@@ -1366,6 +1454,7 @@ def build_codex_skill_reminder_text_for_invoker(tool: str, *, full: bool) -> str
     }
     brief_map = {
         "init": "Init re-establishes the collaboration baseline. Use full reminders here.",
+        "invoke": "Preferred blocking wrapper for one or more cxsk_channel calls. Let invoke wait once and return settled results; do not externally poll.",
         "sync": "General sync only. No mutation permission. Full Codex Skill reminder still applies. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
         "review-this-plan": "Hard gate before execution. Full Codex Skill reminder still applies. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
         "review-this-work": "Hard gate before accepted delivery. approved_work: true accepts only the reviewed execution scope; continue if more agreed scopes remain. Full Codex Skill reminder still applies. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
@@ -1567,6 +1656,33 @@ def format_output_for_cxsk_invoker(
         normalized_reply,
     ]
     return append_migration_notice("\n\n".join(part for part in parts if part), migration_notice)
+
+
+def format_invoke_summary(
+    results: list[InvokeSettledResult],
+    *,
+    execution_mode: str,
+) -> str:
+    completed = sum(1 for item in results if item.status == "ok")
+    failed = len(results) - completed
+    lines = [
+        "## Invoke Summary",
+        "",
+        f"- Requests: {len(results)}",
+        f"- Succeeded: {completed}",
+        f"- Failed: {failed}",
+        f"- Execution mode: {execution_mode}",
+    ]
+    for item in results:
+        lines.extend(
+            [
+                "",
+                f"## {item.request.cxsk_channel_name or DEFAULT_CXSK_CHANNEL_NAME} · {item.request.command} · {item.status}",
+                "",
+                item.reply if item.status == "ok" and item.reply is not None else f"Error: {item.error}",
+            ]
+        )
+    return "\n".join(lines).strip()
 
 
 def build_init_prompt(
@@ -1922,6 +2038,15 @@ class CodexRunResult:
     reply: str
 
 
+@dataclass(frozen=True)
+class InvokeSettledResult:
+    request: InvokeRequest
+    status: str
+    reply: Optional[str]
+    error: Optional[str]
+    updated_cxsk_channel: Optional[CxskChannelConfig]
+
+
 def build_dangerous_new_session_prompt(permission_text: str) -> str:
     return (
         "You are creating a fresh managed Codex cxsk_channel session for future collaboration.\n"
@@ -1954,6 +2079,105 @@ def update_previous_session_ids_for_replacement(
 def looks_like_missing_thread_error(message: str) -> bool:
     lowered = message.lower()
     return "thread" in lowered and "not found" in lowered
+
+
+def is_mutating_command(command: str) -> bool:
+    return command in INVOKE_MUTATING_COMMANDS
+
+
+def command_requires_stdin(command: str) -> bool:
+    return command != "update-config"
+
+
+def execute_command_for_cxsk_channel(
+    repo_root: Path,
+    config: CxskSkillConfig,
+    cxsk_channel: CxskChannelConfig,
+    *,
+    command: str,
+    stdin_text: str,
+    timeout_s: int,
+    model: Optional[str],
+    reasoning_effort: Optional[str],
+    full_reminder: bool,
+) -> tuple[str, CxskChannelConfig]:
+    session_id = cxsk_channel.session_id
+    init_mode: Optional[str] = None
+
+    if command in INVOKE_MUTATING_COMMANDS and not cxsk_channel.can_mutate:
+        raise RuntimeError(
+            "\n".join(
+                [
+                    f"CXSK channel '{cxsk_channel.name}' is configured with can_mutate: false.",
+                    "execute-this-plan and execute-this-plan-part are only allowed for a mutate-capable cxsk_channel.",
+                    "Choose a different cxsk_channel or update the cxsk_channel config through configure.",
+                ]
+            )
+        )
+
+    try:
+        if command == "init":
+            prompt, init_mode = build_init_prompt(repo_root, config, cxsk_channel, stdin_text)
+        else:
+            prompt = build_prompt(
+                repo_root,
+                config,
+                cxsk_channel,
+                command,
+                stdin_text,
+                full_reminder=full_reminder,
+            )
+        sandbox_mode = resolve_codex_exec_sandbox(command, stdin_text)
+        result = run_codex(
+            repo_root=repo_root,
+            session_id=session_id,
+            prompt=prompt,
+            sandbox_mode=sandbox_mode,
+            timeout_s=timeout_s,
+            model=model,
+            reasoning_effort=reasoning_effort,
+        )
+    except Exception as exc:
+        if session_id and looks_like_missing_thread_error(str(exc)):
+            raise RuntimeError(
+                "\n".join(
+                    [
+                        str(exc),
+                        "",
+                        f"The managed cxsk_channel '{cxsk_channel.name}' has a stored session id locally, but Codex could not resume it.",
+                        "Do not manually delete or replace the managed cxsk_channel config and do not call raw `codex` directly.",
+                        "If the user explicitly wants to abandon this continuity and start fresh, run "
+                        "<skill_root>/bin/codex-skill-dangerous-new-session.",
+                    ]
+                )
+            ) from exc
+        raise
+
+    updated_cxsk_channel = replace(
+        cxsk_channel,
+        session_id=result.session_id,
+        model=cxsk_channel.model or model,
+        reasoning_effort=cxsk_channel.reasoning_effort or reasoning_effort,
+        reminder_turn_count=(
+            0
+            if command == "init"
+            else cxsk_channel.reminder_turn_count + 1
+            if command in {"sync", "review-this-plan", "review-this-work", "execute-this-plan", "execute-this-plan-part"}
+            else cxsk_channel.reminder_turn_count
+        ),
+        updated_at=iso_now(),
+    )
+
+    if init_mode is not None:
+        result.reply = validate_init_reply(init_mode, result.reply)
+    elif command == "review-this-plan":
+        result.reply = validate_review_this_plan_reply(result.reply)
+    elif command == "review-this-work":
+        result.reply = validate_review_this_work_reply(result.reply)
+    elif command == "sync":
+        result.reply = validate_sync_reply(result.reply)
+
+    return result.reply, updated_cxsk_channel
 
 
 def resolve_cxsk_channels_for_command(
@@ -2018,6 +2242,28 @@ def persist_cxsk_channels_for_command(
     )
 
 
+def persist_multiple_cxsk_channels(
+    repo_root: Path,
+    config: CxskSkillConfig,
+    cxsk_channels: list[CxskChannelConfig],
+) -> CxskSkillConfig:
+    updated_channels = config.cxsk_channels
+    for cxsk_channel in cxsk_channels:
+        updated_channels = upsert_cxsk_channel(
+            updated_channels,
+            replace(cxsk_channel, updated_at=iso_now()),
+        )
+    updated_config = CxskSkillConfig(
+        version=CONFIG_VERSION,
+        cxsk_invoker=config.cxsk_invoker,
+        shared_stages=config.shared_stages,
+        cxsk_channels=updated_channels,
+        updated_at=iso_now(),
+    )
+    write_skill_config(repo_root, updated_config)
+    return updated_config
+
+
 def append_migration_notice(reply: str, migration_notice: Optional[str]) -> str:
     normalized = reply.rstrip()
     if not migration_notice:
@@ -2026,6 +2272,119 @@ def append_migration_notice(reply: str, migration_notice: Optional[str]) -> str:
         f"{normalized}\n\n---\n"
         f"Migration notice: {migration_notice}\n"
         "Future calls now use the structured managed cxsk_channel config automatically.\n"
+    )
+
+
+def run_invoke_command(
+    repo_root: Path,
+    stdin_text: str,
+    *,
+    default_cxsk_channel_name: str,
+    timeout_s: int,
+    override_model: Optional[str],
+    override_reasoning_effort: Optional[str],
+    effective_default_model: Optional[str],
+    effective_default_reasoning_effort: Optional[str],
+) -> str:
+    payload = parse_invoke_payload(stdin_text)
+    config, migration_notice, _created_canonical = resolve_config_for_update(
+        repo_root,
+        default_model=effective_default_model,
+        default_reasoning_effort=effective_default_reasoning_effort,
+    )
+
+    prepared: list[tuple[InvokeRequest, CxskChannelConfig, bool, Optional[str], Optional[str]]] = []
+    seen_channel_names: set[str] = set()
+    for request in payload.requests:
+        cxsk_channel_name = request.cxsk_channel_name or default_cxsk_channel_name
+        if cxsk_channel_name in seen_channel_names:
+            raise ValueError(
+                f"invoke does not allow duplicate cxsk_channel targets in one call: {cxsk_channel_name}"
+            )
+        seen_channel_names.add(cxsk_channel_name)
+
+        cxsk_channel = find_cxsk_channel(config.cxsk_channels, cxsk_channel_name)
+        if cxsk_channel is None:
+            cxsk_channel = build_cxsk_channel_config(
+                cxsk_channel_name,
+                model=effective_default_model,
+                reasoning_effort=effective_default_reasoning_effort,
+            )
+
+        model = override_model or cxsk_channel.model or DEFAULT_MODEL
+        reasoning_effort = (
+            override_reasoning_effort
+            or cxsk_channel.reasoning_effort
+            or DEFAULT_REASONING_EFFORT
+        )
+        turn_index = collaborative_turn_index(request.command, cxsk_channel)
+        full_reminder = should_use_full_reminder(request.command, turn_index)
+        prepared.append(
+            (
+                replace(request, cxsk_channel_name=cxsk_channel_name),
+                cxsk_channel,
+                full_reminder,
+                model,
+                reasoning_effort,
+            )
+        )
+
+    def perform(item: tuple[InvokeRequest, CxskChannelConfig, bool, Optional[str], Optional[str]]) -> InvokeSettledResult:
+        request, cxsk_channel, full_reminder, model, reasoning_effort = item
+        try:
+            reply, updated_cxsk_channel = execute_command_for_cxsk_channel(
+                repo_root,
+                config,
+                cxsk_channel,
+                command=request.command,
+                stdin_text=request.stdin_text,
+                timeout_s=timeout_s,
+                model=model,
+                reasoning_effort=reasoning_effort,
+                full_reminder=full_reminder,
+            )
+            return InvokeSettledResult(
+                request=request,
+                status="ok",
+                reply=reply,
+                error=None,
+                updated_cxsk_channel=updated_cxsk_channel,
+            )
+        except Exception as exc:
+            return InvokeSettledResult(
+                request=request,
+                status="error",
+                reply=None,
+                error=str(exc),
+                updated_cxsk_channel=None,
+            )
+
+    use_parallel = len(prepared) > 1 and all(not is_mutating_command(item[0].command) for item in prepared)
+    if use_parallel:
+        with ThreadPoolExecutor(max_workers=len(prepared)) as executor:
+            settled = list(executor.map(perform, prepared))
+        execution_mode = "concurrent read-only fanout"
+    else:
+        settled = [perform(item) for item in prepared]
+        execution_mode = "sequential invoke"
+
+    updated_channels = [item.updated_cxsk_channel for item in settled if item.updated_cxsk_channel is not None]
+    updated_config = (
+        persist_multiple_cxsk_channels(repo_root, config, updated_channels)
+        if updated_channels
+        else config
+    )
+    for updated_cxsk_channel in updated_channels:
+        try_promote_exec_session_to_cli(updated_cxsk_channel.session_id)
+
+    summary = format_invoke_summary(settled, execution_mode=execution_mode)
+    return format_output_for_cxsk_invoker(
+        repo_root,
+        updated_config,
+        tool="invoke",
+        full_reminder=True,
+        reply=summary,
+        migration_notice=migration_notice,
     )
 
 
@@ -2072,6 +2431,14 @@ def run_codex(
         )
 
         thread_id: Optional[str] = None
+        stderr_lines: list[str] = []
+        last_activity_at = time.monotonic()
+        last_seen_last_output_size = -1
+        last_seen_last_output_mtime_ns = -1
+
+        def mark_activity() -> None:
+            nonlocal last_activity_at
+            last_activity_at = time.monotonic()
 
         try:
             assert proc.stdin is not None
@@ -2081,9 +2448,12 @@ def run_codex(
             proc.kill()
             raise
 
-        try:
+        def drain_stdout() -> None:
+            nonlocal thread_id
             assert proc.stdout is not None
             for line in proc.stdout:
+                if line:
+                    mark_activity()
                 event = safe_json_loads(line.strip())
                 if not event:
                     continue
@@ -2091,18 +2461,61 @@ def run_codex(
                 if tid and not thread_id:
                     thread_id = tid
 
-            rc = proc.wait(timeout=timeout_s)
-        except subprocess.TimeoutExpired:
+        def drain_stderr() -> None:
+            assert proc.stderr is not None
+            for line in proc.stderr:
+                if line:
+                    mark_activity()
+                    stderr_lines.append(line.rstrip())
+
+        stdout_thread = threading.Thread(target=drain_stdout, daemon=True)
+        stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
+        stdout_thread.start()
+        stderr_thread.start()
+
+        started_at = time.monotonic()
+
+        try:
+            while True:
+                elapsed = time.monotonic() - started_at
+                if elapsed > timeout_s:
+                    proc.kill()
+                    raise RuntimeError(f"codex timed out after {timeout_s}s")
+
+                try:
+                    stat = tmp_last.stat()
+                    if (
+                        stat.st_size != last_seen_last_output_size
+                        or stat.st_mtime_ns != last_seen_last_output_mtime_ns
+                    ):
+                        last_seen_last_output_size = stat.st_size
+                        last_seen_last_output_mtime_ns = stat.st_mtime_ns
+                        mark_activity()
+                except FileNotFoundError:
+                    pass
+
+                if time.monotonic() - last_activity_at > PROCESS_IDLE_TIMEOUT_S:
+                    proc.kill()
+                    raise RuntimeError(
+                        "codex became inactive for too long while waiting "
+                        f"(no observable activity for {PROCESS_IDLE_TIMEOUT_S}s)."
+                    )
+
+                wait_timeout = max(0.1, min(PROCESS_POLL_INTERVAL_S, timeout_s - elapsed))
+                try:
+                    rc = proc.wait(timeout=wait_timeout)
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+        except Exception:
             proc.kill()
-            raise RuntimeError(f"codex timed out after {timeout_s}s")
+            raise
+        finally:
+            stdout_thread.join(timeout=1)
+            stderr_thread.join(timeout=1)
 
         if rc != 0:
-            stderr = ""
-            try:
-                assert proc.stderr is not None
-                stderr = proc.stderr.read().strip()
-            except Exception:
-                stderr = ""
+            stderr = "\n".join(line for line in stderr_lines if line).strip()
             raise RuntimeError(stderr or f"codex exited with code {rc}")
 
         if not thread_id:
@@ -2347,6 +2760,25 @@ def main() -> int:
         )
         return 0
 
+    if args.cmd == "invoke":
+        try:
+            sys.stdout.write(
+                run_invoke_command(
+                    repo_root,
+                    stdin_text,
+                    default_cxsk_channel_name=cxsk_channel_name,
+                    timeout_s=args.timeout_s,
+                    override_model=args.model,
+                    override_reasoning_effort=args.reasoning_effort,
+                    effective_default_model=effective_default_model,
+                    effective_default_reasoning_effort=effective_default_reasoning_effort,
+                )
+            )
+        except Exception as exc:
+            eprint(str(exc))
+            return 1
+        return 0
+
     if args.cmd == "dangerous-new-session":
         try:
             payload = parse_dangerous_new_session_payload(stdin_text)
@@ -2456,103 +2888,27 @@ def main() -> int:
     session_id = cxsk_channel.session_id
     model = args.model or cxsk_channel.model or DEFAULT_MODEL
     reasoning_effort = args.reasoning_effort or cxsk_channel.reasoning_effort or DEFAULT_REASONING_EFFORT
-    init_mode: Optional[str] = None
     turn_index = collaborative_turn_index(args.cmd, cxsk_channel)
     full_reminder = should_use_full_reminder(args.cmd, turn_index)
 
-    if args.cmd in {"execute-this-plan", "execute-this-plan-part"} and not cxsk_channel.can_mutate:
-        eprint(
-            "\n".join(
-                [
-                    f"CXSK channel '{cxsk_channel.name}' is configured with can_mutate: false.",
-                    "execute-this-plan and execute-this-plan-part are only allowed for a mutate-capable cxsk_channel.",
-                    "Choose a different cxsk_channel or update the cxsk_channel config through configure.",
-                ]
-            )
-        )
-        return 1
-
     try:
-        if args.cmd == "init":
-            prompt, init_mode = build_init_prompt(repo_root, config, cxsk_channel, stdin_text)
-        else:
-            prompt = build_prompt(
-                repo_root,
-                config,
-                cxsk_channel,
-                args.cmd,
-                stdin_text,
-                full_reminder=full_reminder,
-            )
-        sandbox_mode = resolve_codex_exec_sandbox(args.cmd, stdin_text)
-        result = run_codex(
-            repo_root=repo_root,
-            session_id=session_id,
-            prompt=prompt,
-            sandbox_mode=sandbox_mode,
+        reply, updated_cxsk_channel = execute_command_for_cxsk_channel(
+            repo_root,
+            config,
+            cxsk_channel,
+            command=args.cmd,
+            stdin_text=stdin_text,
             timeout_s=args.timeout_s,
             model=model,
             reasoning_effort=reasoning_effort,
+            full_reminder=full_reminder,
         )
     except Exception as exc:
-        if session_id and looks_like_missing_thread_error(str(exc)):
-            eprint(
-                "\n".join(
-                    [
-                        str(exc),
-                        "",
-                        f"The managed cxsk_channel '{cxsk_channel_name}' has a stored session id locally, but Codex could not resume it.",
-                        "Do not manually delete or replace the managed cxsk_channel config and do not call raw `codex` directly.",
-                        "If the user explicitly wants to abandon this continuity and start fresh, run "
-                        "<skill_root>/bin/codex-skill-dangerous-new-session.",
-                    ]
-                )
-            )
-        else:
-            eprint(str(exc))
+        eprint(str(exc))
         return 1
 
-    updated_cxsk_channel = replace(
-        cxsk_channel,
-        session_id=result.session_id,
-        model=cxsk_channel.model or model,
-        reasoning_effort=cxsk_channel.reasoning_effort or reasoning_effort,
-        reminder_turn_count=(
-            0
-            if args.cmd == "init"
-            else cxsk_channel.reminder_turn_count + 1
-            if args.cmd in {"sync", "review-this-plan", "review-this-work", "execute-this-plan", "execute-this-plan-part"}
-            else cxsk_channel.reminder_turn_count
-        ),
-        updated_at=iso_now(),
-    )
     persist_cxsk_channels_for_command(repo_root, config, updated_cxsk_channel)
-    try_promote_exec_session_to_cli(result.session_id)
-
-    if init_mode is not None:
-        try:
-            result.reply = validate_init_reply(init_mode, result.reply)
-        except Exception as exc:
-            eprint(str(exc))
-            return 1
-    elif args.cmd == "review-this-plan":
-        try:
-            result.reply = validate_review_this_plan_reply(result.reply)
-        except Exception as exc:
-            eprint(str(exc))
-            return 1
-    elif args.cmd == "review-this-work":
-        try:
-            result.reply = validate_review_this_work_reply(result.reply)
-        except Exception as exc:
-            eprint(str(exc))
-            return 1
-    elif args.cmd == "sync":
-        try:
-            result.reply = validate_sync_reply(result.reply)
-        except Exception as exc:
-            eprint(str(exc))
-            return 1
+    try_promote_exec_session_to_cli(updated_cxsk_channel.session_id)
 
     sys.stdout.write(
         format_output_for_cxsk_invoker(
@@ -2560,7 +2916,7 @@ def main() -> int:
             config,
             tool=args.cmd,
             full_reminder=full_reminder if args.cmd != "init" else True,
-            reply=result.reply,
+            reply=reply,
             migration_notice=migration_notice,
         )
     )

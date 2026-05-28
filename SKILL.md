@@ -91,6 +91,7 @@ Use only one command per current workflow need.
 | Patch cxsk_invoker guidance, shared stage guidance, or cxsk_channel metadata | `configure.md` |
 | Normalize existing managed state and rewrite the canonical config | `update-config.md` |
 | Bootstrap a new shared task or recover after compact/context clear | `init.md` |
+| Drive one or more cxsk_channel calls through one blocking wrapper call | `invoke.md` |
 | General discussion, coordination, disagreement handling, or review relay | `sync.md` |
 | Review a submitted plan before any execution begins | `review-this-plan.md` |
 | Review completed execution work before treating it as accepted or delivered | `review-this-work.md` |
@@ -100,6 +101,7 @@ Use only one command per current workflow need.
 ## Command model
 
 - `init` is collaboration bootstrap only. It is not mutation.
+- `invoke` is the preferred blocking wrapper entrypoint when the cxsk_invoker wants one or more cxsk_channel calls and does not want to poll.
 - `sync` is coordination only. It is not approval and not mutation permission.
 - `review-this-plan` is a hard gate before execution begins.
 - `review-this-work` is a hard gate before accepted delivery.
