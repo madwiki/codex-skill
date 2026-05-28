@@ -88,7 +88,8 @@ Use only one command per current workflow need.
 | Situation | Guide |
 | --- | --- |
 | Replace or switch the current managed session for a channel after explicit user authorization | `dangerous-new-session.md` |
-| Update caller guidance, shared stage guidance, or channel metadata | `configure.md` |
+| Patch caller guidance, shared stage guidance, or channel metadata | `configure.md` |
+| Normalize existing managed state and rewrite the canonical config | `update-config.md` |
 | Bootstrap a new shared task or recover after compact/context clear | `init.md` |
 | General discussion, sync, disagreement handling, or context clarification | `chat.md` |
 | Review a proposed plan before any approved mutation step begins | `review-my-plan.md` |

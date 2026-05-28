@@ -48,9 +48,15 @@ Important behavior:
 - `bin/codex-skill-work-sync`
 - `bin/codex-skill-request-mutation`
 - `bin/codex-skill-configure`
+- `bin/codex-skill-update-config`
 - `bin/codex-skill-dangerous-new-session`
 
 All commands accept optional `--agent <name>`. When omitted, the wrapper uses the `default` channel.
+
+Use:
+
+- `configure` when you want to patch caller guidance, shared guidance, or channel metadata with explicit JSON fields
+- `update-config` when you want the wrapper to read whatever managed state already exists, normalize it, and rewrite the canonical config at `.codex-skill/codex_agents.json`
 
 ## Notes
 

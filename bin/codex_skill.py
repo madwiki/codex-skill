@@ -80,7 +80,8 @@ TOOL_HELP = {
     "work-sync": "Codex sync turn for discussion, plan output, and review response (reads JSON from stdin).",
     "request-mutation": "Codex performs one approved mutation step when this channel is allowed to mutate (reads JSON from stdin).",
     "dangerous-new-session": "Explicitly authorize discarding continuity and starting or switching a managed Codex agent session (reads JSON from stdin).",
-    "configure": "Update the managed Codex skill config, caller baseline, shared guidance, or channel metadata (reads JSON from stdin).",
+    "configure": "Patch caller guidance, shared guidance, or channel metadata (reads JSON from stdin).",
+    "update-config": "Normalize discoverable managed state and rewrite the canonical config (does not read JSON from stdin).",
 }
 
 
@@ -774,6 +775,11 @@ class ConfigurePayload:
     agents_patch: Optional[list[dict[str, object]]]
 
 
+def validate_update_config_input(stdin_text: str) -> None:
+    if stdin_text.replace("\r\n", "\n").replace("\r", "\n").strip():
+        raise ValueError("update-config does not accept input. Run it with empty stdin.")
+
+
 def parse_init_payload(stdin_text: str) -> InitPayload:
     text = stdin_text.replace("\r\n", "\n").replace("\r", "\n").strip()
     if not text:
@@ -1356,7 +1362,10 @@ def build_codex_skill_reminder_text_for_caller(tool: str, *, full: bool) -> str:
             "Do not ask the user about whether to continue execution unless a real unresolved caller/Codex disagreement has persisted for about 10 turns."
         ),
         "configure": (
-            "This command only updates the managed Codex Skill configuration. It does not mutate task files and it does not replace session continuity by itself."
+            "This command applies a caller-supplied config patch. It does not mutate task files and it does not replace session continuity by itself."
+        ),
+        "update-config": (
+            "This command normalizes managed state into the canonical Codex Skill config. It does not mutate task files and it does not replace session continuity by itself."
         ),
         "dangerous-new-session": (
             "This command is for destructive continuity replacement. Use it only when the user explicitly authorizes abandoning or switching the managed session continuity."
@@ -1369,7 +1378,8 @@ def build_codex_skill_reminder_text_for_caller(tool: str, *, full: bool) -> str:
         "review-my-work": "Hard gate before delivery. approved_work: true accepts only the reviewed step; if more agreed steps remain, continue instead of stopping. Full Codex Skill reminder still applies. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
         "work-sync": "Sync only. No mutation permission. Full Codex Skill reminder still applies. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
         "request-mutation": "Single approved mutation step on a mutate-capable channel only. Full Codex Skill reminder still applies.",
-        "configure": "Config update only. Full Codex Skill reminder still applies.",
+        "configure": "Caller-supplied config patch only. Full Codex Skill reminder still applies.",
+        "update-config": "Config update only. Full Codex Skill reminder still applies.",
         "dangerous-new-session": "Destructive continuity replacement. Full Codex Skill reminder still applies.",
     }
     return (full_map if full else brief_map).get(tool, "")
@@ -1384,7 +1394,7 @@ def collaborative_turn_index(tool: str, agent: AgentConfig) -> int:
 
 
 def should_use_full_reminder(tool: str, turn_index: int) -> bool:
-    if tool in {"init", "configure", "dangerous-new-session"}:
+    if tool in {"init", "configure", "update-config", "dangerous-new-session"}:
         return True
     if turn_index <= 0:
         return True
@@ -2014,6 +2024,28 @@ def resolve_agents_for_command(
     return config, agent, migration_notice
 
 
+def resolve_config_for_update(
+    repo_root: Path,
+    *,
+    default_model: Optional[str],
+    default_reasoning_effort: Optional[str],
+) -> tuple[SkillConfig, Optional[str], bool]:
+    migration_notice = migrate_agents_config_to_latest(
+        repo_root,
+        default_model=default_model,
+        default_reasoning_effort=default_reasoning_effort,
+    )
+    config_path = agents_file_path(repo_root)
+    created_canonical = False
+    if config_path.exists():
+        config = read_skill_config(repo_root)
+    else:
+        config = default_skill_config([])
+        write_skill_config(repo_root, config)
+        created_canonical = True
+    return config, migration_notice, created_canonical
+
+
 def persist_agents_for_command(
     repo_root: Path,
     config: SkillConfig,
@@ -2263,7 +2295,7 @@ def main() -> int:
         raise RuntimeError("\n".join(lines))
 
     stdin_text = sys.stdin.read()
-    if not stdin_text.strip():
+    if args.cmd != "update-config" and not stdin_text.strip():
         eprint("Empty input. Provide content via stdin.")
         return 2
 
@@ -2305,6 +2337,45 @@ def main() -> int:
                 repo_root,
                 updated_config,
                 tool="configure",
+                full_reminder=True,
+                reply="\n".join(lines),
+                migration_notice=migration_notice,
+            )
+        )
+        return 0
+
+    if args.cmd == "update-config":
+        try:
+            validate_update_config_input(stdin_text)
+            repo_root.mkdir(parents=True, exist_ok=True)
+            (repo_root / MANAGED_DIRNAME).mkdir(parents=True, exist_ok=True)
+            config, migration_notice, created_canonical = resolve_config_for_update(
+                repo_root,
+                default_model=effective_default_model,
+                default_reasoning_effort=effective_default_reasoning_effort,
+            )
+        except Exception as exc:
+            eprint(str(exc))
+            return 1
+
+        channel_names = ", ".join(agent.name for agent in config.agents) if config.agents else "(none)"
+        if created_canonical:
+            status_line = "Created a canonical managed config because no prior managed config was present."
+        elif migration_notice:
+            status_line = "Normalized existing managed state into the canonical config."
+        else:
+            status_line = "Canonical managed config is already up to date."
+        lines = [
+            "update-config applied.",
+            status_line,
+            f"Config path: {agents_file_path(repo_root)}",
+            f"Managed channels: {channel_names}",
+        ]
+        sys.stdout.write(
+            format_output_for_caller(
+                repo_root,
+                config,
+                tool="update-config",
                 full_reminder=True,
                 reply="\n".join(lines),
                 migration_notice=migration_notice,
