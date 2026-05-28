@@ -1,27 +1,27 @@
 # configure
 
-Use this command when the caller needs to update the managed config instead of editing `.codex-skill/codex_agents.json` by hand.
+Use this command when the cxsk_invoker needs to update the managed config instead of editing `.codex-skill/cxsk_channels.json` by hand.
 
 This command does **not** mutate task files and does **not** change current session continuity by itself.
 
 ## What it can update
 
-- top-level `caller`
+- top-level `cxsk_invoker`
 - top-level `shared_stages`
-- channel metadata inside `agents`
+- cxsk_channel metadata inside `cxsk_channels`
 
-Channel patches are applied by `name`. If the named channel does not exist yet, this command creates it with empty continuity and the provided metadata.
+Cxsk Channel patches are applied by `name`. If the named cxsk_channel does not exist yet, this command creates it with empty continuity and the provided metadata.
 
 Important fields:
 
-- `caller.can_mutate`: reminder-only
-- `agents[].can_mutate`: enforced by `request-mutation`
+- `cxsk_invoker.can_mutate`: reminder-only
+- `cxsk_channels[].can_mutate`: enforced by `request-mutation`
 
 ## Input contract
 
 ```json
 {
-  "caller": {
+  "cxsk_invoker": {
     "baseline": "Optional. Non-empty string or null.",
     "working_style": "Optional. Non-empty string or null.",
     "extra_context": "Optional. Non-empty string or null.",
@@ -33,7 +33,7 @@ Important fields:
   "shared_stages": {
     "chat": "Optional. Non-empty string or null."
   },
-  "agents": [
+  "cxsk_channels": [
     {
       "name": "reviewer-a",
       "description": "Optional. Non-empty string or null.",
@@ -55,7 +55,7 @@ Rules:
 
 - omitted fields stay unchanged
 - `null` clears configurable text fields or removes stage-guidance entries
-- `agents[].name` is required
+- `cxsk_channels[].name` is required
 - `can_mutate` must be a boolean when provided
 - `configure` does not accept direct `session_id` edits
 

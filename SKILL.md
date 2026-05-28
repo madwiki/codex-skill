@@ -1,27 +1,27 @@
 ---
 name: codex-skill
 description: >
-  Use /codex-skill to coordinate with one or more managed Codex channels.
+  Use /codex-skill to coordinate with one or more managed Codex cxsk_channels.
   Run init on every new shared task and after compact/context clear when shared context needs to be re-established.
 ---
 
 # codex-skill
 
-This skill is caller-agnostic. The caller may be Claude Code, Codex, OpenCode, or another tool that invokes the wrapper commands. Codex does not speak to the end user directly. The caller remains responsible for user-facing conversation and for asking the user to decide unresolved issues.
+This skill is cxsk_invoker-agnostic. The cxsk_invoker may be Claude Code, Codex, OpenCode, or another tool that invokes the wrapper commands. Codex does not speak to the end user directly. The cxsk_invoker remains responsible for user-facing conversation and for asking the user to decide unresolved issues.
 
-Session continuity is wrapper-managed. Use only `bin/codex-skill-*` commands. Do not call raw `codex` directly. Do not manually edit, delete, or replace `<repo>/.codex-skill/codex_agents.json`.
+Session continuity is wrapper-managed. Use only `bin/codex-skill-*` commands. Do not call raw `codex` directly. Do not manually edit, delete, or replace `<repo>/.codex-skill/cxsk_channels.json`.
 
 ## Managed config
 
-The managed config lives at `<repo>/.codex-skill/codex_agents.json`.
+The managed config lives at `<repo>/.codex-skill/cxsk_channels.json`.
 
 Top-level fields:
 
-- `caller`
+- `cxsk_invoker`
 - `shared_stages`
-- `agents`
+- `cxsk_channels`
 
-`caller` may store:
+`cxsk_invoker` may store:
 
 - `baseline`
 - `working_style`
@@ -29,7 +29,7 @@ Top-level fields:
 - `stage_guidance`
 - `can_mutate`
 
-`agents[*]` may store:
+`cxsk_channels[*]` may store:
 
 - `name`
 - `description`
@@ -43,19 +43,19 @@ Top-level fields:
 - `reasoning_effort`
 - `previous_session_ids`
 
-`caller.can_mutate` is a reminder field only. The wrapper cannot enforce it because the caller is outside the managed Codex runtime.
+`cxsk_invoker.can_mutate` is a reminder field only. The wrapper cannot enforce it because the cxsk_invoker is outside the managed Codex runtime.
 
-`agents[*].can_mutate` is enforced. Only channels with `can_mutate: true` may use `request-mutation`.
+`cxsk_channels[*].can_mutate` is enforced. Only cxsk_channels with `can_mutate: true` may use `request-mutation`.
 
 ## Injection boundaries
 
-- `caller.*` is caller-side guidance. It is returned to the caller in wrapper output and is not injected into Codex prompts.
+- `cxsk_invoker.*` is cxsk_invoker-side guidance. It is returned to the cxsk_invoker in wrapper output and is not injected into Codex prompts.
 - `shared_stages` is common stage guidance. It may be shown on both sides.
-- `agents[*].*` is channel-side guidance. It is injected only into the currently targeted Codex prompt.
+- `cxsk_channels[*].*` is cxsk_channel-side guidance. It is injected only into the currently targeted Codex prompt.
 - Wrapper-injected system guidance is labeled `Codex Skill Reminder`.
 - User-configured guidance is labeled `User Reminder`.
 - `init` always carries full reminders.
-- Ongoing turns use a 3-turn cadence per channel: full reminder on turns 1, 4, 7, ... and brief reminder on the two turns in between.
+- Ongoing turns use a 3-turn cadence per cxsk_channel: full reminder on turns 1, 4, 7, ... and brief reminder on the two turns in between.
 
 ## References
 
@@ -63,7 +63,7 @@ Use the unified format `[[REF:<relative-path>]]` or `[[REF:<relative-path>::<loc
 
 - Prefer direct narrative text for short or medium guidance.
 - Use `[[REF:...]]` only when the underlying material is large enough that repeating it every turn would waste context.
-- The caller decides when to keep content inline and when to switch to `[[REF:...]]`.
+- The cxsk_invoker decides when to keep content inline and when to switch to `[[REF:...]]`.
 - The wrapper never inlines referenced files automatically.
 - If continuity loss means Codex cannot confidently identify the referenced source and relevant content, Codex must re-read the referenced file before relying on it.
 
@@ -79,7 +79,7 @@ Use the unified format `[[REF:<relative-path>]]` or `[[REF:<relative-path>::<loc
   - relevant docs
   - line ranges when available
 - Without evidence, a point should be framed only as `concern`, `hypothesis`, or `needs verification`, not as a settled blocker.
-- Ask the user only when a real unresolved disagreement between the caller and Codex has persisted for about 10 turns on the same issue.
+- Ask the user only when a real unresolved disagreement between the cxsk_invoker and Codex has persisted for about 10 turns on the same issue.
 
 ## Commands
 
@@ -87,15 +87,15 @@ Use only one command per current workflow need.
 
 | Situation | Guide |
 | --- | --- |
-| Replace or switch the current managed session for a channel after explicit user authorization | `dangerous-new-session.md` |
-| Patch caller guidance, shared stage guidance, or channel metadata | `configure.md` |
+| Replace or switch the current managed session for a cxsk_channel after explicit user authorization | `dangerous-new-session.md` |
+| Patch cxsk_invoker guidance, shared stage guidance, or cxsk_channel metadata | `configure.md` |
 | Normalize existing managed state and rewrite the canonical config | `update-config.md` |
 | Bootstrap a new shared task or recover after compact/context clear | `init.md` |
 | General discussion, sync, disagreement handling, or context clarification | `chat.md` |
 | Review a proposed plan before any approved mutation step begins | `review-my-plan.md` |
 | Review completed work before treating it as accepted or delivered | `review-my-work.md` |
-| Non-mutation sync turn for a managed Codex channel | `work-sync.md` |
-| Execute one approved mutation step on a mutate-capable channel | `request-mutation.md` |
+| Non-mutation sync turn for a managed Codex cxsk_channel | `work-sync.md` |
+| Execute one approved mutation step on a mutate-capable cxsk_channel | `request-mutation.md` |
 
 ## Command model
 
@@ -104,7 +104,7 @@ Use only one command per current workflow need.
 - `review-my-plan` is a hard gate before any approved mutation step begins.
 - `review-my-work` is a hard gate before accepted delivery.
 - `work-sync` is a non-mutation sync turn.
-- `request-mutation` is the only mutation permission turn, and only for a channel with `can_mutate: true`.
+- `request-mutation` is the only mutation permission turn, and only for a cxsk_channel with `can_mutate: true`.
 
 ## Paths
 

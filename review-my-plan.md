@@ -2,7 +2,7 @@
 
 Use this before any approved mutation step begins.
 
-This is a hard gate. The caller must not treat discussion as approval.
+This is a hard gate. The cxsk_invoker must not treat discussion as approval.
 
 ## Input contract
 

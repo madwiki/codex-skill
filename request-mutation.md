@@ -1,6 +1,6 @@
 # request-mutation
 
-Use this to authorize one approved mutation step on a channel with `can_mutate: true`.
+Use this to authorize one approved mutation step on a cxsk_channel with `can_mutate: true`.
 
 This is the only mutation permission turn.
 
@@ -26,4 +26,4 @@ Rules:
 
 - `approved_mutation` is required
 - `sandbox_mode` may only be `default` or `full-access`
-- if the selected channel has `can_mutate: false`, the wrapper rejects this command
+- if the selected cxsk_channel has `can_mutate: false`, the wrapper rejects this command

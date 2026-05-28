@@ -16,7 +16,7 @@ Use it for:
 
 ```json
 {
-  "message_for_codex": "Write the caller's discussion message here."
+  "message_for_codex": "Write the cxsk_invoker's discussion message here."
 }
 ```
 
@@ -24,7 +24,7 @@ Optional:
 
 ```json
 {
-  "message_for_codex": "Write the caller's discussion message here.",
+  "message_for_codex": "Write the cxsk_invoker's discussion message here.",
   "fresh_user_message": "Only if the user actually said new words that matter for this discussion."
 }
 ```

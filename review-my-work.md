@@ -1,6 +1,6 @@
 # review-my-work
 
-Use this after state-changing work has happened and before the caller treats that work as accepted or delivered.
+Use this after state-changing work has happened and before the cxsk_invoker treats that work as accepted or delivered.
 
 This is a hard gate.
 

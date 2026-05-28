@@ -45,12 +45,12 @@ REQUEST_MUTATION_SANDBOX_DEFAULT = "default"
 REQUEST_MUTATION_SANDBOX_FULL_ACCESS = "full-access"
 DANGEROUS_NEW_SESSION_PERMISSION_FIELD = "user_permission"
 DANGEROUS_NEW_SESSION_TARGET_FIELD = "target_session_id"
-DANGEROUS_NEW_SESSION_DESCRIPTION_FIELD = "agent_description"
+DANGEROUS_NEW_SESSION_CXSK_CHANNEL_DESCRIPTION_FIELD = "cxsk_channel_description"
 DANGEROUS_NEW_SESSION_MODEL_FIELD = "model"
 DANGEROUS_NEW_SESSION_REASONING_EFFORT_FIELD = "reasoning_effort"
-CONFIGURE_CALLER_FIELD = "caller"
+CONFIGURE_CXSK_INVOKER_FIELD = "cxsk_invoker"
 CONFIGURE_SHARED_STAGES_FIELD = "shared_stages"
-CONFIGURE_AGENTS_FIELD = "agents"
+CONFIGURE_CXSK_CHANNELS_FIELD = "cxsk_channels"
 INIT_TASK_REPLY_TITLE = "Task Understanding Reply"
 INIT_RECOVERY_REPLY_TITLE = "Context Recovery Reply"
 REVIEW_PLAN_REPLY_TITLE = "Plan Review Reply"
@@ -60,27 +60,33 @@ WORK_SYNC_PLAN_TITLE = "Plan"
 SANDBOX_READ_ONLY = "read-only"
 SANDBOX_WORKSPACE_WRITE = "workspace-write"
 SANDBOX_DANGER_FULL_ACCESS = "danger-full-access"
-AGENTS_FILENAME = "codex_agents.json"
+CXSK_CHANNELS_FILENAME = "cxsk_channels.json"
 LEGACY_SESSION_FILENAME = "codex_session.json"
 LEGACY_HISTORY_FILENAME = "codex_session_history.json"
 MANAGED_DIRNAME = ".codex-skill"
 LEGACY_MANAGED_DIRNAME = ".claude"
-DEFAULT_AGENT_NAME = "default"
-DEFAULT_AGENT_DESCRIPTION = "Primary Codex collaboration channel."
-MIGRATED_AGENT_DESCRIPTION = "Migrated primary Codex collaboration channel."
-CONFIG_VERSION = 4
+DEFAULT_CXSK_CHANNEL_NAME = "default"
+DEFAULT_CXSK_CHANNEL_DESCRIPTION = "Primary managed CXSK channel."
+MIGRATED_CXSK_CHANNEL_DESCRIPTION = "Migrated primary managed CXSK channel."
+CONFIG_VERSION = 5
 REF_DIRECTORY = f"{MANAGED_DIRNAME}/refs"
 REF_PATTERN = re.compile(r"\[\[REF:(?P<path>[^:\]]+?)(?:::(?P<locator>[^\]]+))?\]\]")
+
+LEGACY_STRUCTURED_FILENAMES = (
+    "codex_agents.json",
+    "codex_channels.json",
+    "cxsk_channels.json",
+)
 
 TOOL_HELP = {
     "init": "Bootstrap Codex collaboration for a new task or recovery sync (reads JSON from stdin).",
     "chat": "Discussion / disagreement resolution turn (reads JSON from stdin).",
-    "review-my-plan": "Codex reviews the caller's plan without mutating state (reads JSON from stdin).",
+    "review-my-plan": "Codex reviews the cxsk_invoker's plan without mutating state (reads JSON from stdin).",
     "review-my-work": "Codex reviews completed work without mutating state (reads JSON from stdin).",
     "work-sync": "Codex sync turn for discussion, plan output, and review response (reads JSON from stdin).",
-    "request-mutation": "Codex performs one approved mutation step when this channel is allowed to mutate (reads JSON from stdin).",
-    "dangerous-new-session": "Explicitly authorize discarding continuity and starting or switching a managed Codex agent session (reads JSON from stdin).",
-    "configure": "Patch caller guidance, shared guidance, or channel metadata (reads JSON from stdin).",
+    "request-mutation": "Codex performs one approved mutation step when this cxsk_channel is allowed to mutate (reads JSON from stdin).",
+    "dangerous-new-session": "Explicitly authorize discarding continuity and starting or switching a managed Codex cxsk_channel session (reads JSON from stdin).",
+    "configure": "Patch cxsk_invoker guidance, shared guidance, or cxsk_channel metadata (reads JSON from stdin).",
     "update-config": "Normalize discoverable managed state and rewrite the canonical config (does not read JSON from stdin).",
 }
 
@@ -117,8 +123,8 @@ def find_session_root(start: Path) -> Optional[Path]:
 
     IMPORTANT:
     - Never treat the global ~/.claude or ~/.codex-skill directory as a project root.
-    - `.codex-skill/codex_agents.json` is the stable anchor.
-    - `.claude/codex_agents.json` and `.claude/codex_session.json` are accepted only as legacy anchors so the wrapper can
+    - `.codex-skill/cxsk_channels.json` is the stable anchor.
+    - Legacy structured config filenames and `.claude/codex_session.json` are accepted only as migration anchors so the wrapper can
       migrate them into the new structured config location.
     - `.codex-skill/` or `.claude/` alone can exist at many levels for other purposes, so we do
       not auto-pick based on the directory alone.
@@ -128,9 +134,9 @@ def find_session_root(start: Path) -> Optional[Path]:
         legacy_dir = p / LEGACY_MANAGED_DIRNAME
         if is_global_managed_dir(managed_dir) or is_global_managed_dir(legacy_dir):
             continue
-        if (managed_dir / AGENTS_FILENAME).is_file():
+        if any((managed_dir / filename).is_file() for filename in LEGACY_STRUCTURED_FILENAMES):
             return p
-        if (legacy_dir / AGENTS_FILENAME).is_file():
+        if any((legacy_dir / filename).is_file() for filename in LEGACY_STRUCTURED_FILENAMES):
             return p
         if (legacy_dir / LEGACY_SESSION_FILENAME).is_file():
             return p
@@ -151,12 +157,16 @@ def candidate_roots_with_managed_dir(start: Path, limit: int = 5) -> list[Path]:
     return candidates
 
 
-def agents_file_path(repo_root: Path) -> Path:
-    return repo_root / MANAGED_DIRNAME / AGENTS_FILENAME
+def cxsk_channels_file_path(repo_root: Path) -> Path:
+    return repo_root / MANAGED_DIRNAME / CXSK_CHANNELS_FILENAME
 
 
-def legacy_agents_file_path(repo_root: Path) -> Path:
-    return repo_root / LEGACY_MANAGED_DIRNAME / AGENTS_FILENAME
+def iter_legacy_structured_config_paths(repo_root: Path) -> Iterator[Path]:
+    for filename in LEGACY_STRUCTURED_FILENAMES:
+        managed_path = repo_root / MANAGED_DIRNAME / filename
+        if managed_path.name != CXSK_CHANNELS_FILENAME:
+            yield managed_path
+        yield repo_root / LEGACY_MANAGED_DIRNAME / filename
 
 
 def legacy_session_file_path(repo_root: Path) -> Path:
@@ -177,7 +187,7 @@ def iso_now() -> str:
 
 
 @dataclass(frozen=True)
-class AgentConfig:
+class CxskChannelConfig:
     name: str
     description: str
     focus: Optional[str]
@@ -194,7 +204,7 @@ class AgentConfig:
 
 
 @dataclass(frozen=True)
-class CallerConfig:
+class CxskInvokerConfig:
     baseline: Optional[str]
     working_style: Optional[str]
     extra_context: Optional[str]
@@ -203,11 +213,11 @@ class CallerConfig:
 
 
 @dataclass(frozen=True)
-class SkillConfig:
+class CxskSkillConfig:
     version: int
-    caller: CallerConfig
+    cxsk_invoker: CxskInvokerConfig
     shared_stages: dict[str, str]
-    agents: list[AgentConfig]
+    cxsk_channels: list[CxskChannelConfig]
     updated_at: str
 
 
@@ -249,13 +259,13 @@ def normalize_string_map(value: object, *, field_name: str) -> dict[str, str]:
     return result
 
 
-def default_agent_description(name: str) -> str:
-    if name == DEFAULT_AGENT_NAME:
-        return DEFAULT_AGENT_DESCRIPTION
-    return f"Codex collaboration channel '{name}'."
+def default_cxsk_channel_description(name: str) -> str:
+    if name == DEFAULT_CXSK_CHANNEL_NAME:
+        return DEFAULT_CXSK_CHANNEL_DESCRIPTION
+    return f"Managed CXSK channel '{name}'."
 
 
-def build_agent_config(
+def build_cxsk_channel_config(
     name: str,
     *,
     description: Optional[str] = None,
@@ -269,14 +279,14 @@ def build_agent_config(
     reasoning_effort: Optional[str] = None,
     previous_session_ids: tuple[str, ...] = (),
     reminder_turn_count: int = 0,
-) -> AgentConfig:
+) -> CxskChannelConfig:
     normalized_name = normalize_optional_string(name)
     if not normalized_name:
-        raise ValueError("Agent name must be a non-empty string.")
-    normalized_description = normalize_optional_string(description) or default_agent_description(
+        raise ValueError("CXSK channel name must be a non-empty string.")
+    normalized_description = normalize_optional_string(description) or default_cxsk_channel_description(
         normalized_name
     )
-    return AgentConfig(
+    return CxskChannelConfig(
         name=normalized_name,
         description=normalized_description,
         focus=normalize_optional_string(focus),
@@ -293,24 +303,24 @@ def build_agent_config(
     )
 
 
-def parse_agent_config(obj: object) -> AgentConfig:
+def parse_cxsk_channel_config(obj: object) -> CxskChannelConfig:
     if not isinstance(obj, dict):
-        raise ValueError("Each agent entry must be a JSON object.")
+        raise ValueError("Each cxsk_channel entry must be a JSON object.")
     name = normalize_optional_string(obj.get("name"))
     if not name:
-        raise ValueError("Each agent entry requires a non-empty string field: name.")
-    description = normalize_optional_string(obj.get("description")) or default_agent_description(name)
+        raise ValueError("Each cxsk_channel entry requires a non-empty string field: name.")
+    description = normalize_optional_string(obj.get("description")) or default_cxsk_channel_description(name)
     updated_at = normalize_optional_string(obj.get("updated_at")) or iso_now()
     raw_can_mutate = obj.get("can_mutate", True)
     if not isinstance(raw_can_mutate, bool):
-        raise ValueError(f"agents[{name}].can_mutate must be a boolean when provided.")
-    return AgentConfig(
+        raise ValueError(f"cxsk_channels[{name}].can_mutate must be a boolean when provided.")
+    return CxskChannelConfig(
         name=name,
         description=description,
         focus=normalize_optional_string(obj.get("focus")),
         baseline=normalize_optional_string(obj.get("baseline")),
         extra_context=normalize_optional_string(obj.get("extra_context")),
-        stage_guidance=normalize_string_map(obj.get("stage_guidance"), field_name=f"agents[{name}].stage_guidance"),
+        stage_guidance=normalize_string_map(obj.get("stage_guidance"), field_name=f"cxsk_channels[{name}].stage_guidance"),
         can_mutate=raw_can_mutate,
         session_id=normalize_optional_string(obj.get("session_id")),
         model=normalize_optional_string(obj.get("model")),
@@ -321,26 +331,26 @@ def parse_agent_config(obj: object) -> AgentConfig:
     )
 
 
-def agent_config_to_json(agent: AgentConfig) -> dict[str, object]:
+def cxsk_channel_config_to_json(cxsk_channel: CxskChannelConfig) -> dict[str, object]:
     return {
-        "name": agent.name,
-        "description": agent.description,
-        "focus": agent.focus,
-        "baseline": agent.baseline,
-        "extra_context": agent.extra_context,
-        "stage_guidance": agent.stage_guidance,
-        "can_mutate": agent.can_mutate,
-        "session_id": agent.session_id,
-        "model": agent.model,
-        "reasoning_effort": agent.reasoning_effort,
-        "previous_session_ids": list(agent.previous_session_ids),
-        "reminder_turn_count": agent.reminder_turn_count,
-        "updated_at": agent.updated_at,
+        "name": cxsk_channel.name,
+        "description": cxsk_channel.description,
+        "focus": cxsk_channel.focus,
+        "baseline": cxsk_channel.baseline,
+        "extra_context": cxsk_channel.extra_context,
+        "stage_guidance": cxsk_channel.stage_guidance,
+        "can_mutate": cxsk_channel.can_mutate,
+        "session_id": cxsk_channel.session_id,
+        "model": cxsk_channel.model,
+        "reasoning_effort": cxsk_channel.reasoning_effort,
+        "previous_session_ids": list(cxsk_channel.previous_session_ids),
+        "reminder_turn_count": cxsk_channel.reminder_turn_count,
+        "updated_at": cxsk_channel.updated_at,
     }
 
 
-def default_caller_config() -> CallerConfig:
-    return CallerConfig(
+def default_cxsk_invoker_config() -> CxskInvokerConfig:
+    return CxskInvokerConfig(
         baseline=None,
         working_style=None,
         extra_context=None,
@@ -349,34 +359,34 @@ def default_caller_config() -> CallerConfig:
     )
 
 
-def default_skill_config(agents: Optional[list[AgentConfig]] = None) -> SkillConfig:
-    return SkillConfig(
+def default_cxsk_skill_config(cxsk_channels: Optional[list[CxskChannelConfig]] = None) -> CxskSkillConfig:
+    return CxskSkillConfig(
         version=CONFIG_VERSION,
-        caller=default_caller_config(),
+        cxsk_invoker=default_cxsk_invoker_config(),
         shared_stages={},
-        agents=list(agents or []),
+        cxsk_channels=list(cxsk_channels or []),
         updated_at=iso_now(),
     )
 
 
-def parse_caller_config(obj: object) -> CallerConfig:
+def parse_cxsk_invoker_config(obj: object) -> CxskInvokerConfig:
     if obj is None:
-        return default_caller_config()
+        return default_cxsk_invoker_config()
     if not isinstance(obj, dict):
-        raise ValueError("caller must be a JSON object when provided.")
+        raise ValueError("cxsk_invoker must be a JSON object when provided.")
     raw_can_mutate = obj.get("can_mutate", True)
     if not isinstance(raw_can_mutate, bool):
-        raise ValueError("caller.can_mutate must be a boolean when provided.")
-    return CallerConfig(
+        raise ValueError("cxsk_invoker.can_mutate must be a boolean when provided.")
+    return CxskInvokerConfig(
         baseline=normalize_optional_string(obj.get("baseline")),
         working_style=normalize_optional_string(obj.get("working_style")),
         extra_context=normalize_optional_string(obj.get("extra_context")),
-        stage_guidance=normalize_string_map(obj.get("stage_guidance"), field_name="caller.stage_guidance"),
+        stage_guidance=normalize_string_map(obj.get("stage_guidance"), field_name="cxsk_invoker.stage_guidance"),
         can_mutate=raw_can_mutate,
     )
 
 
-def caller_config_to_json(config: CallerConfig) -> dict[str, object]:
+def cxsk_invoker_config_to_json(config: CxskInvokerConfig) -> dict[str, object]:
     return {
         "baseline": config.baseline,
         "working_style": config.working_style,
@@ -386,26 +396,26 @@ def caller_config_to_json(config: CallerConfig) -> dict[str, object]:
     }
 
 
-def parse_skill_config_object(obj: object, *, path: Path) -> SkillConfig:
+def parse_skill_config_object(obj: object, *, path: Path) -> CxskSkillConfig:
     if not isinstance(obj, dict):
-        raise RuntimeError(f"Agent config file must contain a JSON object or legacy JSON array: {path}")
-    agents_value = obj.get("agents")
-    if agents_value is None:
-        raise RuntimeError(f"Config object must contain an 'agents' array: {path}")
-    if not isinstance(agents_value, list):
-        raise RuntimeError(f"Config field 'agents' must be a JSON array: {path}")
-    agents: list[AgentConfig] = []
+        raise RuntimeError(f"CXSK channel config file must contain a JSON object or legacy JSON array: {path}")
+    cxsk_channels_value = obj.get("cxsk_channels", obj.get("channels", obj.get("agents")))
+    if cxsk_channels_value is None:
+        raise RuntimeError(f"Config object must contain a 'cxsk_channels' array: {path}")
+    if not isinstance(cxsk_channels_value, list):
+        raise RuntimeError(f"Config field 'cxsk_channels' must be a JSON array: {path}")
+    cxsk_channels: list[CxskChannelConfig] = []
     seen: set[str] = set()
-    for raw in agents_value:
-        agent = parse_agent_config(raw)
-        if agent.name in seen:
-            raise RuntimeError(f"Duplicate agent name in {path}: {agent.name}")
-        seen.add(agent.name)
-        agents.append(agent)
+    for raw in cxsk_channels_value:
+        cxsk_channel = parse_cxsk_channel_config(raw)
+        if cxsk_channel.name in seen:
+            raise RuntimeError(f"Duplicate cxsk_channel name in {path}: {cxsk_channel.name}")
+        seen.add(cxsk_channel.name)
+        cxsk_channels.append(cxsk_channel)
     try:
         shared_stages = normalize_string_map(obj.get("shared_stages"), field_name="shared_stages")
-        caller_source = obj.get("caller", obj.get("claude"))
-        caller = parse_caller_config(caller_source)
+        cxsk_invoker_source = obj.get("cxsk_invoker", obj.get("invoker", obj.get("caller", obj.get("claude"))))
+        cxsk_invoker = parse_cxsk_invoker_config(cxsk_invoker_source)
     except ValueError as exc:
         raise RuntimeError(str(exc)) from exc
     version = obj.get("version")
@@ -414,48 +424,48 @@ def parse_skill_config_object(obj: object, *, path: Path) -> SkillConfig:
     else:
         normalized_version = CONFIG_VERSION
     updated_at = normalize_optional_string(obj.get("updated_at")) or iso_now()
-    return SkillConfig(
+    return CxskSkillConfig(
         version=normalized_version,
-        caller=caller,
+        cxsk_invoker=cxsk_invoker,
         shared_stages=shared_stages,
-        agents=agents,
+        cxsk_channels=cxsk_channels,
         updated_at=updated_at,
     )
 
 
-def skill_config_to_json(config: SkillConfig) -> dict[str, object]:
+def skill_config_to_json(config: CxskSkillConfig) -> dict[str, object]:
     return {
         "version": config.version,
-        "caller": caller_config_to_json(config.caller),
+        "cxsk_invoker": cxsk_invoker_config_to_json(config.cxsk_invoker),
         "shared_stages": config.shared_stages,
-        "agents": [agent_config_to_json(agent) for agent in config.agents],
+        "cxsk_channels": [cxsk_channel_config_to_json(cxsk_channel) for cxsk_channel in config.cxsk_channels],
         "updated_at": config.updated_at,
     }
 
 
-def read_skill_config(repo_root: Path) -> SkillConfig:
-    path = agents_file_path(repo_root)
+def read_skill_config(repo_root: Path) -> CxskSkillConfig:
+    path = cxsk_channels_file_path(repo_root)
     if not path.exists():
-        return default_skill_config()
+        return default_cxsk_skill_config()
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Invalid agent config JSON in {path}: {exc.msg}") from exc
+        raise RuntimeError(f"Invalid cxsk_channel config JSON in {path}: {exc.msg}") from exc
     if isinstance(data, list):
-        agents = []
+        cxsk_channels = []
         seen: set[str] = set()
         for raw in data:
-            agent = parse_agent_config(raw)
-            if agent.name in seen:
-                raise RuntimeError(f"Duplicate agent name in {path}: {agent.name}")
-            seen.add(agent.name)
-            agents.append(agent)
-        return default_skill_config(agents)
+            cxsk_channel = parse_cxsk_channel_config(raw)
+            if cxsk_channel.name in seen:
+                raise RuntimeError(f"Duplicate cxsk_channel name in {path}: {cxsk_channel.name}")
+            seen.add(cxsk_channel.name)
+            cxsk_channels.append(cxsk_channel)
+        return default_cxsk_skill_config(cxsk_channels)
     return parse_skill_config_object(data, path=path)
 
 
-def write_skill_config(repo_root: Path, config: SkillConfig) -> None:
-    path = agents_file_path(repo_root)
+def write_skill_config(repo_root: Path, config: CxskSkillConfig) -> None:
+    path = cxsk_channels_file_path(repo_root)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = skill_config_to_json(config)
     tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
@@ -491,26 +501,27 @@ def read_legacy_session_history(repo_root: Path) -> tuple[str, ...]:
 class MigrationSource:
     kind: str
     path: Optional[Path]
-    config: SkillConfig
+    config: CxskSkillConfig
     detail: str
 
 
 def structured_config_needs_migration(raw_obj: dict[str, object]) -> bool:
-    if "claude" in raw_obj:
+    if any(legacy_key in raw_obj for legacy_key in ("claude", "caller", "invoker", "channels", "agents")):
         return True
     version = raw_obj.get("version")
     if not isinstance(version, int) or version < CONFIG_VERSION:
         return True
     if "work_modes" in raw_obj:
         return True
-    caller = raw_obj.get("caller")
-    if not isinstance(caller, dict) or "can_mutate" not in caller:
+    cxsk_invoker = raw_obj.get("cxsk_invoker")
+    if not isinstance(cxsk_invoker, dict) or "can_mutate" not in cxsk_invoker:
         return True
-    agents = raw_obj.get("agents")
-    if isinstance(agents, list):
-        for raw_agent in agents:
-            if not isinstance(raw_agent, dict) or "can_mutate" not in raw_agent:
+    cxsk_channels = raw_obj.get("cxsk_channels")
+    if isinstance(cxsk_channels, list):
+        for raw_cxsk_channel in cxsk_channels:
+            if not isinstance(raw_cxsk_channel, dict) or "can_mutate" not in raw_cxsk_channel:
                 return True
+        return False
     return False
 
 
@@ -520,14 +531,13 @@ def load_migration_source(
     default_model: Optional[str],
     default_reasoning_effort: Optional[str],
 ) -> Optional[MigrationSource]:
-    config_path = agents_file_path(repo_root)
-    legacy_config_path = legacy_agents_file_path(repo_root)
+    config_path = cxsk_channels_file_path(repo_root)
 
     if config_path.exists():
         try:
             data = json.loads(config_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
-            raise RuntimeError(f"Invalid agent config JSON in {config_path}: {exc.msg}") from exc
+            raise RuntimeError(f"Invalid cxsk_channel config JSON in {config_path}: {exc.msg}") from exc
         if isinstance(data, dict):
             if not structured_config_needs_migration(data):
                 return None
@@ -541,16 +551,18 @@ def load_migration_source(
             return MigrationSource(
                 kind="current-array",
                 path=config_path,
-                config=default_skill_config([parse_agent_config(item) for item in data]),
+                config=default_cxsk_skill_config([parse_cxsk_channel_config(item) for item in data]),
                 detail="legacy array-based config needed normalization",
             )
-        raise RuntimeError(f"Agent config file must contain a JSON object or legacy JSON array: {config_path}")
+        raise RuntimeError(f"CXSK channel config file must contain a JSON object or legacy JSON array: {config_path}")
 
-    if legacy_config_path.exists():
+    for legacy_config_path in iter_legacy_structured_config_paths(repo_root):
+        if not legacy_config_path.exists():
+            continue
         try:
             data = json.loads(legacy_config_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
-            raise RuntimeError(f"Invalid agent config JSON in {legacy_config_path}: {exc.msg}") from exc
+            raise RuntimeError(f"Invalid cxsk_channel config JSON in {legacy_config_path}: {exc.msg}") from exc
         if isinstance(data, dict):
             return MigrationSource(
                 kind="legacy-structured",
@@ -562,19 +574,19 @@ def load_migration_source(
             return MigrationSource(
                 kind="legacy-array",
                 path=legacy_config_path,
-                config=default_skill_config([parse_agent_config(item) for item in data]),
+                config=default_cxsk_skill_config([parse_cxsk_channel_config(item) for item in data]),
                 detail="legacy array-based config from the old directory",
             )
-        raise RuntimeError(f"Agent config file must contain a JSON object or legacy JSON array: {legacy_config_path}")
+        raise RuntimeError(f"CXSK channel config file must contain a JSON object or legacy JSON array: {legacy_config_path}")
 
     legacy_session_id = read_legacy_session_id(repo_root)
     legacy_history = read_legacy_session_history(repo_root)
     if legacy_session_id is None and not legacy_history:
         return None
 
-    migrated = build_agent_config(
-        DEFAULT_AGENT_NAME,
-        description=MIGRATED_AGENT_DESCRIPTION,
+    migrated = build_cxsk_channel_config(
+        DEFAULT_CXSK_CHANNEL_NAME,
+        description=MIGRATED_CXSK_CHANNEL_DESCRIPTION,
         session_id=legacy_session_id,
         model=default_model,
         reasoning_effort=default_reasoning_effort,
@@ -583,12 +595,12 @@ def load_migration_source(
     return MigrationSource(
         kind="legacy-session",
         path=legacy_session_file_path(repo_root),
-        config=default_skill_config([migrated]),
+        config=default_cxsk_skill_config([migrated]),
         detail="legacy single-session continuity files",
     )
 
 
-def migrate_agents_config_to_latest(
+def migrate_cxsk_channels_config_to_latest(
     repo_root: Path,
     *,
     default_model: Optional[str],
@@ -602,7 +614,7 @@ def migrate_agents_config_to_latest(
     if source is None:
         return None
     write_skill_config(repo_root, source.config)
-    destination = agents_file_path(repo_root)
+    destination = cxsk_channels_file_path(repo_root)
     if source.kind == "legacy-session":
         return (
             "Legacy session continuity files were read, normalized, and rewritten into the canonical config at "
@@ -619,25 +631,28 @@ def migrate_agents_config_to_latest(
     )
 
 
-def find_agent(agents: list[AgentConfig], name: str) -> Optional[AgentConfig]:
-    for agent in agents:
-        if agent.name == name:
-            return agent
+def find_cxsk_channel(cxsk_channels: list[CxskChannelConfig], name: str) -> Optional[CxskChannelConfig]:
+    for cxsk_channel in cxsk_channels:
+        if cxsk_channel.name == name:
+            return cxsk_channel
     return None
 
 
-def upsert_agent(agents: list[AgentConfig], updated_agent: AgentConfig) -> list[AgentConfig]:
-    next_agents: list[AgentConfig] = []
+def upsert_cxsk_channel(
+    cxsk_channels: list[CxskChannelConfig],
+    updated_cxsk_channel: CxskChannelConfig,
+) -> list[CxskChannelConfig]:
+    next_cxsk_channels: list[CxskChannelConfig] = []
     replaced_existing = False
-    for agent in agents:
-        if agent.name == updated_agent.name:
-            next_agents.append(updated_agent)
+    for cxsk_channel in cxsk_channels:
+        if cxsk_channel.name == updated_cxsk_channel.name:
+            next_cxsk_channels.append(updated_cxsk_channel)
             replaced_existing = True
         else:
-            next_agents.append(agent)
+            next_cxsk_channels.append(cxsk_channel)
     if not replaced_existing:
-        next_agents.append(updated_agent)
-    return next_agents
+        next_cxsk_channels.append(updated_cxsk_channel)
+    return next_cxsk_channels
 
 
 def merge_string_map(
@@ -656,32 +671,32 @@ def merge_string_map(
 
 
 def apply_configure_payload(
-    config: SkillConfig,
+    config: CxskSkillConfig,
     payload: ConfigurePayload,
-) -> SkillConfig:
-    caller = config.caller
-    if payload.caller_patch is not None:
-        stage_patch = payload.caller_patch.get("stage_guidance")
-        caller = CallerConfig(
-            baseline=payload.caller_patch["baseline"] if "baseline" in payload.caller_patch else caller.baseline,
-            working_style=payload.caller_patch["working_style"] if "working_style" in payload.caller_patch else caller.working_style,
-            extra_context=payload.caller_patch["extra_context"] if "extra_context" in payload.caller_patch else caller.extra_context,
+) -> CxskSkillConfig:
+    cxsk_invoker = config.cxsk_invoker
+    if payload.cxsk_invoker_patch is not None:
+        stage_patch = payload.cxsk_invoker_patch.get("stage_guidance")
+        cxsk_invoker = CxskInvokerConfig(
+            baseline=payload.cxsk_invoker_patch["baseline"] if "baseline" in payload.cxsk_invoker_patch else cxsk_invoker.baseline,
+            working_style=payload.cxsk_invoker_patch["working_style"] if "working_style" in payload.cxsk_invoker_patch else cxsk_invoker.working_style,
+            extra_context=payload.cxsk_invoker_patch["extra_context"] if "extra_context" in payload.cxsk_invoker_patch else cxsk_invoker.extra_context,
             stage_guidance=merge_string_map(
-                caller.stage_guidance,
+                cxsk_invoker.stage_guidance,
                 stage_patch if isinstance(stage_patch, dict) else None,
             ),
-            can_mutate=payload.caller_patch["can_mutate"] if "can_mutate" in payload.caller_patch else caller.can_mutate,
+            can_mutate=payload.cxsk_invoker_patch["can_mutate"] if "can_mutate" in payload.cxsk_invoker_patch else cxsk_invoker.can_mutate,
         )
 
     shared_stages = merge_string_map(config.shared_stages, payload.shared_stages_patch)
 
-    agents = list(config.agents)
-    if payload.agents_patch:
-        for patch in payload.agents_patch:
+    cxsk_channels = list(config.cxsk_channels)
+    if payload.cxsk_channels_patch:
+        for patch in payload.cxsk_channels_patch:
             name = patch["name"]
-            existing = find_agent(agents, name)
+            existing = find_cxsk_channel(cxsk_channels, name)
             if existing is None:
-                updated_agent = build_agent_config(
+                updated_cxsk_channel = build_cxsk_channel_config(
                     name,
                     description=patch.get("description"),
                     focus=patch.get("focus"),
@@ -693,7 +708,7 @@ def apply_configure_payload(
                     reasoning_effort=patch.get("reasoning_effort"),
                 )
             else:
-                updated_agent = build_agent_config(
+                updated_cxsk_channel = build_cxsk_channel_config(
                     name,
                     description=patch.get("description") if "description" in patch else existing.description,
                     focus=patch.get("focus") if "focus" in patch else existing.focus,
@@ -709,13 +724,13 @@ def apply_configure_payload(
                     reasoning_effort=patch.get("reasoning_effort") if "reasoning_effort" in patch else existing.reasoning_effort,
                     previous_session_ids=existing.previous_session_ids,
                 )
-            agents = upsert_agent(agents, updated_agent)
+            cxsk_channels = upsert_cxsk_channel(cxsk_channels, updated_cxsk_channel)
 
-    return SkillConfig(
+    return CxskSkillConfig(
         version=CONFIG_VERSION,
-        caller=caller,
+        cxsk_invoker=cxsk_invoker,
         shared_stages=shared_stages,
-        agents=agents,
+        cxsk_channels=cxsk_channels,
         updated_at=iso_now(),
     )
 
@@ -763,16 +778,16 @@ class RequestMutationPayload:
 class DangerousNewSessionPayload:
     user_permission: str
     target_session_id: Optional[str]
-    agent_description: Optional[str]
+    cxsk_channel_description: Optional[str]
     model: Optional[str]
     reasoning_effort: Optional[str]
 
 
 @dataclass(frozen=True)
 class ConfigurePayload:
-    caller_patch: Optional[dict[str, object]]
+    cxsk_invoker_patch: Optional[dict[str, object]]
     shared_stages_patch: Optional[dict[str, Optional[str]]]
-    agents_patch: Optional[list[dict[str, object]]]
+    cxsk_channels_patch: Optional[list[dict[str, object]]]
 
 
 def validate_update_config_input(stdin_text: str) -> None:
@@ -1035,7 +1050,7 @@ def parse_dangerous_new_session_payload(stdin_text: str) -> DangerousNewSessionP
     allowed_keys = {
         DANGEROUS_NEW_SESSION_PERMISSION_FIELD,
         DANGEROUS_NEW_SESSION_TARGET_FIELD,
-        DANGEROUS_NEW_SESSION_DESCRIPTION_FIELD,
+        DANGEROUS_NEW_SESSION_CXSK_CHANNEL_DESCRIPTION_FIELD,
         DANGEROUS_NEW_SESSION_MODEL_FIELD,
         DANGEROUS_NEW_SESSION_REASONING_EFFORT_FIELD,
     }
@@ -1073,7 +1088,9 @@ def parse_dangerous_new_session_payload(stdin_text: str) -> DangerousNewSessionP
     return DangerousNewSessionPayload(
         user_permission=user_permission.strip(),
         target_session_id=target_session_id,
-        agent_description=parse_optional_config_string(DANGEROUS_NEW_SESSION_DESCRIPTION_FIELD),
+        cxsk_channel_description=parse_optional_config_string(
+            DANGEROUS_NEW_SESSION_CXSK_CHANNEL_DESCRIPTION_FIELD
+        ),
         model=parse_optional_config_string(DANGEROUS_NEW_SESSION_MODEL_FIELD),
         reasoning_effort=parse_optional_config_string(DANGEROUS_NEW_SESSION_REASONING_EFFORT_FIELD),
     )
@@ -1100,7 +1117,7 @@ def parse_configure_payload(stdin_text: str) -> ConfigurePayload:
     text = stdin_text.replace("\r\n", "\n").replace("\r", "\n").strip()
     if not text:
         raise ValueError(
-            "configure input is empty. Provide JSON with at least one of: caller, shared_stages, agents."
+            "configure input is empty. Provide JSON with at least one of: cxsk_invoker, shared_stages, cxsk_channels."
         )
     try:
         obj = json.loads(text)
@@ -1110,48 +1127,44 @@ def parse_configure_payload(stdin_text: str) -> ConfigurePayload:
         raise ValueError("configure input must be a JSON object.")
 
     allowed_keys = {
-        CONFIGURE_CALLER_FIELD,
+        CONFIGURE_CXSK_INVOKER_FIELD,
         CONFIGURE_SHARED_STAGES_FIELD,
-        CONFIGURE_AGENTS_FIELD,
+        CONFIGURE_CXSK_CHANNELS_FIELD,
     }
-    legacy_keys = {"claude"} if "claude" in obj else set()
-    unknown_keys = set(obj.keys()) - allowed_keys - legacy_keys
+    unknown_keys = set(obj.keys()) - allowed_keys
     if unknown_keys:
         raise ValueError(f"configure input has unsupported fields: {', '.join(sorted(unknown_keys))}")
     if not obj:
         raise ValueError(
-            "configure input must contain at least one of: caller, shared_stages, agents."
+            "configure input must contain at least one of: cxsk_invoker, shared_stages, cxsk_channels."
         )
 
-    if CONFIGURE_CALLER_FIELD in obj and "claude" in obj:
-        raise ValueError("configure input must not contain both caller and legacy claude fields.")
-
-    caller_patch = obj.get(CONFIGURE_CALLER_FIELD, obj.get("claude"))
-    if caller_patch is not None:
-        if not isinstance(caller_patch, dict):
-            raise ValueError("configure field caller must be a JSON object.")
-        allowed_caller_keys = {"baseline", "working_style", "extra_context", "stage_guidance", "can_mutate"}
-        unknown_caller_keys = set(caller_patch.keys()) - allowed_caller_keys
-        if unknown_caller_keys:
+    cxsk_invoker_patch = obj.get(CONFIGURE_CXSK_INVOKER_FIELD)
+    if cxsk_invoker_patch is not None:
+        if not isinstance(cxsk_invoker_patch, dict):
+            raise ValueError("configure field cxsk_invoker must be a JSON object.")
+        allowed_cxsk_invoker_keys = {"baseline", "working_style", "extra_context", "stage_guidance", "can_mutate"}
+        unknown_cxsk_invoker_keys = set(cxsk_invoker_patch.keys()) - allowed_cxsk_invoker_keys
+        if unknown_cxsk_invoker_keys:
             raise ValueError(
-                "configure.caller has unsupported fields: "
-                + ", ".join(sorted(unknown_caller_keys))
+                "configure.cxsk_invoker has unsupported fields: "
+                + ", ".join(sorted(unknown_cxsk_invoker_keys))
             )
-        if "stage_guidance" in caller_patch and caller_patch["stage_guidance"] is not None:
-            caller_patch = dict(caller_patch)
-            caller_patch["stage_guidance"] = parse_nullable_string_patch_map(
-                caller_patch["stage_guidance"],
-                field_name="configure.caller.stage_guidance",
+        if "stage_guidance" in cxsk_invoker_patch and cxsk_invoker_patch["stage_guidance"] is not None:
+            cxsk_invoker_patch = dict(cxsk_invoker_patch)
+            cxsk_invoker_patch["stage_guidance"] = parse_nullable_string_patch_map(
+                cxsk_invoker_patch["stage_guidance"],
+                field_name="configure.cxsk_invoker.stage_guidance",
             )
         for field in ("baseline", "working_style", "extra_context"):
-            if field in caller_patch:
-                value = caller_patch[field]
+            if field in cxsk_invoker_patch:
+                value = cxsk_invoker_patch[field]
                 if value is not None and (not isinstance(value, str) or not value.strip()):
-                    raise ValueError(f"configure.caller.{field} must be a non-empty string or null.")
+                    raise ValueError(f"configure.cxsk_invoker.{field} must be a non-empty string or null.")
                 if isinstance(value, str):
-                    caller_patch[field] = value.strip()
-        if "can_mutate" in caller_patch and not isinstance(caller_patch["can_mutate"], bool):
-            raise ValueError("configure.caller.can_mutate must be a boolean when provided.")
+                    cxsk_invoker_patch[field] = value.strip()
+        if "can_mutate" in cxsk_invoker_patch and not isinstance(cxsk_invoker_patch["can_mutate"], bool):
+            raise ValueError("configure.cxsk_invoker.can_mutate must be a boolean when provided.")
 
     shared_stages_patch = obj.get(CONFIGURE_SHARED_STAGES_FIELD)
     if shared_stages_patch is not None:
@@ -1160,16 +1173,16 @@ def parse_configure_payload(stdin_text: str) -> ConfigurePayload:
             field_name="configure.shared_stages",
         )
 
-    agents_patch_value = obj.get(CONFIGURE_AGENTS_FIELD)
-    agents_patch: Optional[list[dict[str, object]]] = None
-    if agents_patch_value is not None:
-        if not isinstance(agents_patch_value, list):
-            raise ValueError("configure field agents must be a JSON array.")
-        agents_patch = []
-        for index, raw_agent in enumerate(agents_patch_value):
-            if not isinstance(raw_agent, dict):
-                raise ValueError(f"configure.agents[{index}] must be a JSON object.")
-            allowed_agent_keys = {
+    cxsk_channels_patch_value = obj.get(CONFIGURE_CXSK_CHANNELS_FIELD)
+    cxsk_channels_patch: Optional[list[dict[str, object]]] = None
+    if cxsk_channels_patch_value is not None:
+        if not isinstance(cxsk_channels_patch_value, list):
+            raise ValueError("configure field cxsk_channels must be a JSON array.")
+        cxsk_channels_patch = []
+        for index, raw_cxsk_channel in enumerate(cxsk_channels_patch_value):
+            if not isinstance(raw_cxsk_channel, dict):
+                raise ValueError(f"configure.cxsk_channels[{index}] must be a JSON object.")
+            allowed_cxsk_channel_keys = {
                 "name",
                 "description",
                 "focus",
@@ -1180,38 +1193,38 @@ def parse_configure_payload(stdin_text: str) -> ConfigurePayload:
                 "model",
                 "reasoning_effort",
             }
-            unknown_agent_keys = set(raw_agent.keys()) - allowed_agent_keys
-            if unknown_agent_keys:
+            unknown_cxsk_channel_keys = set(raw_cxsk_channel.keys()) - allowed_cxsk_channel_keys
+            if unknown_cxsk_channel_keys:
                 raise ValueError(
-                    f"configure.agents[{index}] has unsupported fields: {', '.join(sorted(unknown_agent_keys))}"
+                    f"configure.cxsk_channels[{index}] has unsupported fields: {', '.join(sorted(unknown_cxsk_channel_keys))}"
                 )
-            name = normalize_optional_string(raw_agent.get("name"))
+            name = normalize_optional_string(raw_cxsk_channel.get("name"))
             if not name:
-                raise ValueError(f"configure.agents[{index}] requires a non-empty string field: name.")
-            normalized_agent = dict(raw_agent)
-            normalized_agent["name"] = name
+                raise ValueError(f"configure.cxsk_channels[{index}] requires a non-empty string field: name.")
+            normalized_cxsk_channel = dict(raw_cxsk_channel)
+            normalized_cxsk_channel["name"] = name
             for field in ("description", "focus", "baseline", "extra_context", "model", "reasoning_effort"):
-                if field in normalized_agent:
-                    value = normalized_agent[field]
+                if field in normalized_cxsk_channel:
+                    value = normalized_cxsk_channel[field]
                     if value is not None and (not isinstance(value, str) or not value.strip()):
                         raise ValueError(
-                            f"configure.agents[{index}].{field} must be a non-empty string or null."
+                            f"configure.cxsk_channels[{index}].{field} must be a non-empty string or null."
                         )
                     if isinstance(value, str):
-                        normalized_agent[field] = value.strip()
-            if "stage_guidance" in normalized_agent and normalized_agent["stage_guidance"] is not None:
-                normalized_agent["stage_guidance"] = parse_nullable_string_patch_map(
-                    normalized_agent["stage_guidance"],
-                    field_name=f"configure.agents[{index}].stage_guidance",
+                        normalized_cxsk_channel[field] = value.strip()
+            if "stage_guidance" in normalized_cxsk_channel and normalized_cxsk_channel["stage_guidance"] is not None:
+                normalized_cxsk_channel["stage_guidance"] = parse_nullable_string_patch_map(
+                    normalized_cxsk_channel["stage_guidance"],
+                    field_name=f"configure.cxsk_channels[{index}].stage_guidance",
                 )
-            if "can_mutate" in normalized_agent and not isinstance(normalized_agent["can_mutate"], bool):
-                raise ValueError(f"configure.agents[{index}].can_mutate must be a boolean when provided.")
-            agents_patch.append(normalized_agent)
+            if "can_mutate" in normalized_cxsk_channel and not isinstance(normalized_cxsk_channel["can_mutate"], bool):
+                raise ValueError(f"configure.cxsk_channels[{index}].can_mutate must be a boolean when provided.")
+            cxsk_channels_patch.append(normalized_cxsk_channel)
 
     return ConfigurePayload(
-        caller_patch=caller_patch,
+        cxsk_invoker_patch=cxsk_invoker_patch,
         shared_stages_patch=shared_stages_patch,
-        agents_patch=agents_patch,
+        cxsk_channels_patch=cxsk_channels_patch,
     )
 
 
@@ -1306,35 +1319,35 @@ def build_codex_skill_reminder_text_for_codex(
 
     brief_map = {
         "chat": (
-            "Persistent collaboration turn with the caller, not the end user. "
+            "Persistent collaboration turn with the cxsk_invoker, not the end user. "
             "Discussion only; no mutation and no gate verdict. "
-            "Compare evidence, surface disagreement clearly, and only ask the caller to escalate to the user "
-            "if a real unresolved disagreement between you and the caller has persisted for about 10 turns."
+            "Compare evidence, surface disagreement clearly, and only ask the cxsk_invoker to escalate to the user "
+            "if a real unresolved disagreement between you and the cxsk_invoker has persisted for about 10 turns."
         ),
         "review-my-plan": (
             "Hard gate. Review the plan before any mutation, do not mutate in this turn, and judge from facts and whole-system coherence. "
             "The first non-empty line must be approved_to_mutate: true or approved_to_mutate: false, followed by ## Plan Review Reply. "
-            "Do not ask for user input unless a real unresolved disagreement between you and the caller has persisted for about 10 turns."
+            "Do not ask for user input unless a real unresolved disagreement between you and the cxsk_invoker has persisted for about 10 turns."
         ),
         "review-my-work": (
             "Hard gate. Review the actual work, not intent; do not mutate in this turn. "
             "The first non-empty line must be approved_work: true or approved_work: false, followed by ## Work Review Reply. "
-            "Do not ask for user input unless a real unresolved disagreement between you and the caller has persisted for about 10 turns."
+            "Do not ask for user input unless a real unresolved disagreement between you and the cxsk_invoker has persisted for about 10 turns."
         ),
         "work-sync": (
-            "Sync turn only. Discussion, disagreement handling, candidate plan formation, or response to caller review are allowed; mutation is not. "
+            "Sync turn only. Discussion, disagreement handling, candidate plan formation, or response to cxsk_invoker review are allowed; mutation is not. "
             "Return ## Discussion Reply, and add ## Plan only when a candidate plan is genuinely ready. "
-            "Do not ask for user input unless a real unresolved disagreement between you and the caller has persisted for about 10 turns."
+            "Do not ask for user input unless a real unresolved disagreement between you and the cxsk_invoker has persisted for about 10 turns."
         ),
         "request-mutation": (
-            "Mutation turn for a mutate-capable channel. Perform only the approved step, do not widen scope, then stop and report what changed, what you verified, what concerns remain, and where you stopped. "
+            "Mutation turn for a mutate-capable cxsk_channel. Perform only the approved step, do not widen scope, then stop and report what changed, what you verified, what concerns remain, and where you stopped. "
             "Do not ask the user directly."
         ),
     }
     return brief_map.get(tool, prompt_text.strip())
 
 
-def build_codex_skill_reminder_text_for_caller(tool: str, *, full: bool) -> str:
+def build_codex_skill_reminder_text_for_invoker(tool: str, *, full: bool) -> str:
     full_map = {
         "init": (
             "Run init on every new shared task and after compact/context clear when you need to re-bootstrap shared context. "
@@ -1342,27 +1355,27 @@ def build_codex_skill_reminder_text_for_caller(tool: str, *, full: bool) -> str:
         ),
         "chat": (
             "This is discussion only. Do not treat chat as plan approval or mutation permission. "
-            "Keep pushing for real consensus, and do not stop for user input unless a real unresolved caller/Codex disagreement has persisted for about 10 turns."
+            "Keep pushing for real consensus, and do not stop for user input unless a real unresolved cxsk_invoker/Codex disagreement has persisted for about 10 turns."
         ),
         "review-my-plan": (
             "This is the hard gate before any approved mutation step begins. Submit a concrete plan, require direct fact-checking, and do not treat mere discussion as approval. "
-            "Do not ask the user just because execution feels uncertain; escalate only when a real unresolved caller/Codex disagreement has persisted for about 10 turns."
+            "Do not ask the user just because execution feels uncertain; escalate only when a real unresolved cxsk_invoker/Codex disagreement has persisted for about 10 turns."
         ),
         "review-my-work": (
             "This is the hard gate before delivery. Review actual work, evidence, and coherence. "
             "approved_work: true accepts only the reviewed step, not automatically the whole larger plan; if more agreed steps remain, continue directly to the next step instead of stopping. "
-            "Do not ask the user just because next execution steps are undecided; escalate only when a real unresolved caller/Codex disagreement has persisted for about 10 turns."
+            "Do not ask the user just because next execution steps are undecided; escalate only when a real unresolved cxsk_invoker/Codex disagreement has persisted for about 10 turns."
         ),
         "work-sync": (
             "This is the non-mutation sync turn. Use it for discussion, disagreement, candidate plans, and response to review. "
-            "It is not mutation permission. Escalate to the user only for a real unresolved caller/Codex disagreement that has persisted for about 10 turns."
+            "It is not mutation permission. Escalate to the user only for a real unresolved cxsk_invoker/Codex disagreement that has persisted for about 10 turns."
         ),
         "request-mutation": (
-            "This is the mutation permission turn for the selected mutate-capable channel. Approve exactly one concrete step, then expect Codex to stop and report back. "
-            "Do not ask the user about whether to continue execution unless a real unresolved caller/Codex disagreement has persisted for about 10 turns."
+            "This is the mutation permission turn for the selected mutate-capable cxsk_channel. Approve exactly one concrete step, then expect Codex to stop and report back. "
+            "Do not ask the user about whether to continue execution unless a real unresolved cxsk_invoker/Codex disagreement has persisted for about 10 turns."
         ),
         "configure": (
-            "This command applies a caller-supplied config patch. It does not mutate task files and it does not replace session continuity by itself."
+            "This command applies a cxsk_invoker-supplied config patch. It does not mutate task files and it does not replace session continuity by itself."
         ),
         "update-config": (
             "This command normalizes managed state into the canonical Codex Skill config. It does not mutate task files and it does not replace session continuity by itself."
@@ -1377,19 +1390,19 @@ def build_codex_skill_reminder_text_for_caller(tool: str, *, full: bool) -> str:
         "review-my-plan": "Hard gate before mutation. Full Codex Skill reminder still applies. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
         "review-my-work": "Hard gate before delivery. approved_work: true accepts only the reviewed step; if more agreed steps remain, continue instead of stopping. Full Codex Skill reminder still applies. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
         "work-sync": "Sync only. No mutation permission. Full Codex Skill reminder still applies. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
-        "request-mutation": "Single approved mutation step on a mutate-capable channel only. Full Codex Skill reminder still applies.",
-        "configure": "Caller-supplied config patch only. Full Codex Skill reminder still applies.",
+        "request-mutation": "Single approved mutation step on a mutate-capable cxsk_channel only. Full Codex Skill reminder still applies.",
+        "configure": "CXSK invoker-supplied config patch only. Full Codex Skill reminder still applies.",
         "update-config": "Config update only. Full Codex Skill reminder still applies.",
         "dangerous-new-session": "Destructive continuity replacement. Full Codex Skill reminder still applies.",
     }
     return (full_map if full else brief_map).get(tool, "")
 
 
-def collaborative_turn_index(tool: str, agent: AgentConfig) -> int:
+def collaborative_turn_index(tool: str, cxsk_channel: CxskChannelConfig) -> int:
     if tool == "init":
         return 0
     if tool in {"chat", "review-my-plan", "review-my-work", "work-sync", "request-mutation"}:
-        return agent.reminder_turn_count + 1
+        return cxsk_channel.reminder_turn_count + 1
     return 0
 
 
@@ -1402,7 +1415,7 @@ def should_use_full_reminder(tool: str, turn_index: int) -> bool:
 
 
 def build_common_stage_items(
-    config: SkillConfig,
+    config: CxskSkillConfig,
     *,
     tool: str,
 ) -> list[tuple[str, str]]:
@@ -1416,77 +1429,77 @@ def build_common_stage_items(
     return items
 
 
-def build_caller_user_items(
-    config: SkillConfig,
+def build_cxsk_invoker_user_items(
+    config: CxskSkillConfig,
     *,
     tool: str,
 ) -> list[tuple[str, str]]:
     items: list[tuple[str, str]] = []
     stage_name = tool
 
-    if config.caller.baseline:
-        items.append(("Caller Baseline", config.caller.baseline))
-    if config.caller.working_style:
-        items.append(("Caller Working Style", config.caller.working_style))
-    if config.caller.extra_context:
-        items.append(("Caller Extra Context", config.caller.extra_context))
+    if config.cxsk_invoker.baseline:
+        items.append(("CXSK Invoker Baseline", config.cxsk_invoker.baseline))
+    if config.cxsk_invoker.working_style:
+        items.append(("CXSK Invoker Working Style", config.cxsk_invoker.working_style))
+    if config.cxsk_invoker.extra_context:
+        items.append(("CXSK Invoker Extra Context", config.cxsk_invoker.extra_context))
     items.append(
         (
-            "Caller Mutation Permission",
+            "CXSK Invoker Mutation Permission",
             (
-                "The caller is allowed to mutate directly when appropriate."
-                if config.caller.can_mutate
-                else "The caller is not allowed to mutate directly and must route implementation through a mutate-capable channel."
+                "The cxsk_invoker is allowed to mutate directly when appropriate."
+                if config.cxsk_invoker.can_mutate
+                else "The cxsk_invoker is not allowed to mutate directly and must route implementation through a mutate-capable cxsk_channel."
             ),
         )
     )
 
-    caller_stage_text = config.caller.stage_guidance.get(stage_name)
-    if caller_stage_text:
-        items.append(("Caller Stage Guidance", caller_stage_text))
+    cxsk_invoker_stage_text = config.cxsk_invoker.stage_guidance.get(stage_name)
+    if cxsk_invoker_stage_text:
+        items.append(("CXSK Invoker Stage Guidance", cxsk_invoker_stage_text))
 
     return items
 
 
-def build_agent_user_items(
-    config: SkillConfig,
-    agent: AgentConfig,
+def build_cxsk_channel_user_items(
+    config: CxskSkillConfig,
+    cxsk_channel: CxskChannelConfig,
     *,
     tool: str,
 ) -> list[tuple[str, str]]:
     stage_name = tool
     items: list[tuple[str, str]] = []
 
-    if agent.description and agent.description != default_agent_description(agent.name):
-        items.append(("Agent Description", agent.description))
-    if agent.focus:
-        items.append(("Agent Focus", agent.focus))
-    if agent.baseline:
-        items.append(("Agent Baseline", agent.baseline))
-    if agent.extra_context:
-        items.append(("Agent Extra Context", agent.extra_context))
+    if cxsk_channel.description and cxsk_channel.description != default_cxsk_channel_description(cxsk_channel.name):
+        items.append(("CXSK Channel Description", cxsk_channel.description))
+    if cxsk_channel.focus:
+        items.append(("CXSK Channel Focus", cxsk_channel.focus))
+    if cxsk_channel.baseline:
+        items.append(("CXSK Channel Baseline", cxsk_channel.baseline))
+    if cxsk_channel.extra_context:
+        items.append(("CXSK Channel Extra Context", cxsk_channel.extra_context))
     items.append(
         (
-            "Channel Mutation Permission",
+            "CXSK Channel Mutation Permission",
             (
-                "This channel may mutate when the workflow explicitly reaches the mutation entrypoint."
-                if agent.can_mutate
-                else "This channel must not mutate files. It may discuss, review, or plan, but implementation must be routed elsewhere."
+                "This cxsk_channel may mutate when the workflow explicitly reaches the mutation entrypoint."
+                if cxsk_channel.can_mutate
+                else "This cxsk_channel must not mutate files. It may discuss, review, or plan, but implementation must be routed elsewhere."
             ),
         )
     )
 
-    agent_stage_text = agent.stage_guidance.get(stage_name)
-    if agent_stage_text:
-        items.append(("Agent Stage Guidance", agent_stage_text))
+    cxsk_channel_stage_text = cxsk_channel.stage_guidance.get(stage_name)
+    if cxsk_channel_stage_text:
+        items.append(("CXSK Channel Stage Guidance", cxsk_channel_stage_text))
 
     return items
 
 
 def compose_prompt(
     repo_root: Path,
-    config: SkillConfig,
-    agent: AgentConfig,
+    config: CxskSkillConfig,
+    cxsk_channel: CxskChannelConfig,
     *,
     tool: str,
     full_reminder: bool,
@@ -1495,7 +1508,7 @@ def compose_prompt(
     if not base_parts:
         raise RuntimeError("compose_prompt requires at least one base part.")
     common_items = build_common_stage_items(config, tool=tool)
-    agent_items = build_agent_user_items(config, agent, tool=tool)
+    agent_items = build_cxsk_channel_user_items(config, cxsk_channel, tool=tool)
     skill_reminder = build_codex_skill_reminder_text_for_codex(
         tool,
         full=full_reminder,
@@ -1529,9 +1542,9 @@ def compose_prompt(
     return "\n\n".join(part for part in prompt_parts if part).strip() + "\n"
 
 
-def format_output_for_caller(
+def format_output_for_cxsk_invoker(
     repo_root: Path,
-    config: SkillConfig,
+    config: CxskSkillConfig,
     *,
     tool: str,
     full_reminder: bool,
@@ -1540,8 +1553,8 @@ def format_output_for_caller(
 ) -> str:
     normalized_reply = reply.rstrip()
     common_items = build_common_stage_items(config, tool=tool)
-    caller_items = build_caller_user_items(config, tool=tool)
-    skill_body_parts = [build_codex_skill_reminder_text_for_caller(tool, full=full_reminder)]
+    cxsk_invoker_items = build_cxsk_invoker_user_items(config, tool=tool)
+    skill_body_parts = [build_codex_skill_reminder_text_for_invoker(tool, full=full_reminder)]
     common_body = render_named_items(common_items)
     if common_body:
         skill_body_parts.append(common_body)
@@ -1551,9 +1564,9 @@ def format_output_for_caller(
     )
 
     if full_reminder:
-        user_body = render_named_items(caller_items)
+        user_body = render_named_items(cxsk_invoker_items)
     else:
-        user_body = build_brief_user_reminder("User Reminder", caller_items, tool)
+        user_body = build_brief_user_reminder("User Reminder", cxsk_invoker_items, tool)
     user_block = ""
     if user_body:
         user_block = "## User Reminder ({})\n\n{}".format(
@@ -1578,22 +1591,22 @@ def format_output_for_caller(
 
 def build_init_prompt(
     repo_root: Path,
-    config: SkillConfig,
-    agent: AgentConfig,
+    config: CxskSkillConfig,
+    cxsk_channel: CxskChannelConfig,
     stdin_text: str,
 ) -> tuple[str, str]:
     payload = parse_init_payload(stdin_text)
     if payload.mode == "task":
         prompt_name = "init-task.md"
-        label = "Task background from the caller:"
+        label = "Task background from the cxsk_invoker:"
     else:
         prompt_name = "init-recovery.md"
-        label = "Recovery background from the caller:"
+        label = "Recovery background from the cxsk_invoker:"
 
     prompt = compose_prompt(
         repo_root,
         config,
-        agent,
+        cxsk_channel,
         tool="init",
         full_reminder=True,
         base_parts=[
@@ -1608,8 +1621,8 @@ def build_init_prompt(
 
 def build_review_my_plan_prompt(
     repo_root: Path,
-    config: SkillConfig,
-    agent: AgentConfig,
+    config: CxskSkillConfig,
+    cxsk_channel: CxskChannelConfig,
     stdin_text: str,
     *,
     full_reminder: bool,
@@ -1617,14 +1630,14 @@ def build_review_my_plan_prompt(
     payload = parse_review_my_plan_payload(stdin_text)
     parts = [
         load_prompt_asset("review-my-plan.md"),
-        "Plan for review from the caller:",
+        "Plan for review from the cxsk_invoker:",
         payload.plan_for_review,
     ]
 
     if payload.new_information:
         parts.extend(
             [
-                "New information from the caller:",
+                "New information from the cxsk_invoker:",
                 payload.new_information,
             ]
         )
@@ -1642,7 +1655,7 @@ def build_review_my_plan_prompt(
     return compose_prompt(
         repo_root,
         config,
-        agent,
+        cxsk_channel,
         tool="review-my-plan",
         full_reminder=full_reminder,
         base_parts=parts,
@@ -1651,8 +1664,8 @@ def build_review_my_plan_prompt(
 
 def build_chat_prompt(
     repo_root: Path,
-    config: SkillConfig,
-    agent: AgentConfig,
+    config: CxskSkillConfig,
+    cxsk_channel: CxskChannelConfig,
     stdin_text: str,
     *,
     full_reminder: bool,
@@ -1660,7 +1673,7 @@ def build_chat_prompt(
     payload = parse_chat_payload(stdin_text)
     parts = [
         load_prompt_asset("chat.md"),
-        "Message from the caller:",
+        "Message from the cxsk_invoker:",
         payload.message_for_codex,
     ]
 
@@ -1677,7 +1690,7 @@ def build_chat_prompt(
     return compose_prompt(
         repo_root,
         config,
-        agent,
+        cxsk_channel,
         tool="chat",
         full_reminder=full_reminder,
         base_parts=parts,
@@ -1686,8 +1699,8 @@ def build_chat_prompt(
 
 def build_review_my_work_prompt(
     repo_root: Path,
-    config: SkillConfig,
-    agent: AgentConfig,
+    config: CxskSkillConfig,
+    cxsk_channel: CxskChannelConfig,
     stdin_text: str,
     *,
     full_reminder: bool,
@@ -1695,14 +1708,14 @@ def build_review_my_work_prompt(
     payload = parse_review_my_work_payload(stdin_text)
     parts = [
         load_prompt_asset("review-my-work.md"),
-        "Work for review from the caller:",
+        "Work for review from the cxsk_invoker:",
         payload.work_for_review,
     ]
 
     if payload.new_information:
         parts.extend(
             [
-                "New information from the caller:",
+                "New information from the cxsk_invoker:",
                 payload.new_information,
             ]
         )
@@ -1720,7 +1733,7 @@ def build_review_my_work_prompt(
     return compose_prompt(
         repo_root,
         config,
-        agent,
+        cxsk_channel,
         tool="review-my-work",
         full_reminder=full_reminder,
         base_parts=parts,
@@ -1729,8 +1742,8 @@ def build_review_my_work_prompt(
 
 def build_work_sync_prompt(
     repo_root: Path,
-    config: SkillConfig,
-    agent: AgentConfig,
+    config: CxskSkillConfig,
+    cxsk_channel: CxskChannelConfig,
     stdin_text: str,
     *,
     full_reminder: bool,
@@ -1738,7 +1751,7 @@ def build_work_sync_prompt(
     payload = parse_work_sync_payload(stdin_text)
     parts = [
         load_prompt_asset("work-sync.md"),
-        "Sync message from the caller:",
+        "Sync message from the cxsk_invoker:",
         payload.sync_message,
     ]
 
@@ -1755,7 +1768,7 @@ def build_work_sync_prompt(
     return compose_prompt(
         repo_root,
         config,
-        agent,
+        cxsk_channel,
         tool="work-sync",
         full_reminder=full_reminder,
         base_parts=parts,
@@ -1764,8 +1777,8 @@ def build_work_sync_prompt(
 
 def build_request_mutation_prompt(
     repo_root: Path,
-    config: SkillConfig,
-    agent: AgentConfig,
+    config: CxskSkillConfig,
+    cxsk_channel: CxskChannelConfig,
     stdin_text: str,
     *,
     full_reminder: bool,
@@ -1774,12 +1787,12 @@ def build_request_mutation_prompt(
     sandbox_note = (
         "Execution sandbox for this turn: workspace-write (default mutation sandbox)."
         if payload.sandbox_mode == REQUEST_MUTATION_SANDBOX_DEFAULT
-        else "Execution sandbox for this turn: danger-full-access (explicit full-access escalation approved by the caller)."
+        else "Execution sandbox for this turn: danger-full-access (explicit full-access escalation approved by the cxsk_invoker)."
     )
     parts = [
         load_prompt_asset("request-mutation.md"),
         sandbox_note,
-        "Approved mutation from the caller:",
+        "Approved mutation from the cxsk_invoker:",
         payload.approved_mutation,
     ]
 
@@ -1796,7 +1809,7 @@ def build_request_mutation_prompt(
     return compose_prompt(
         repo_root,
         config,
-        agent,
+        cxsk_channel,
         tool="request-mutation",
         full_reminder=full_reminder,
         base_parts=parts,
@@ -1886,23 +1899,23 @@ def validate_work_sync_reply(reply: str) -> str:
 
 def build_prompt(
     repo_root: Path,
-    config: SkillConfig,
-    agent: AgentConfig,
+    config: CxskSkillConfig,
+    cxsk_channel: CxskChannelConfig,
     tool: str,
     stdin_text: str,
     *,
     full_reminder: bool,
 ) -> str:
     if tool == "init":
-        prompt, _mode = build_init_prompt(repo_root, config, agent, stdin_text)
+        prompt, _mode = build_init_prompt(repo_root, config, cxsk_channel, stdin_text)
         return prompt
     if tool == "chat":
-        return build_chat_prompt(repo_root, config, agent, stdin_text, full_reminder=full_reminder)
+        return build_chat_prompt(repo_root, config, cxsk_channel, stdin_text, full_reminder=full_reminder)
     if tool == "review-my-plan":
         return build_review_my_plan_prompt(
             repo_root,
             config,
-            agent,
+            cxsk_channel,
             stdin_text,
             full_reminder=full_reminder,
         )
@@ -1910,7 +1923,7 @@ def build_prompt(
         return build_review_my_work_prompt(
             repo_root,
             config,
-            agent,
+            cxsk_channel,
             stdin_text,
             full_reminder=full_reminder,
         )
@@ -1918,7 +1931,7 @@ def build_prompt(
         return build_work_sync_prompt(
             repo_root,
             config,
-            agent,
+            cxsk_channel,
             stdin_text,
             full_reminder=full_reminder,
         )
@@ -1926,7 +1939,7 @@ def build_prompt(
         return build_request_mutation_prompt(
             repo_root,
             config,
-            agent,
+            cxsk_channel,
             stdin_text,
             full_reminder=full_reminder,
         )
@@ -1969,7 +1982,7 @@ class CodexRunResult:
 
 def build_dangerous_new_session_prompt(permission_text: str) -> str:
     return (
-        "You are creating a fresh managed Codex agent session for future collaboration.\n"
+        "You are creating a fresh managed Codex cxsk_channel session for future collaboration.\n"
         "This call exists only to establish a new session id.\n"
         "Do not ask questions. Do not assume prior task continuity.\n"
         "Reply with a short plain-text acknowledgment that the fresh managed session is ready.\n\n"
@@ -2001,27 +2014,27 @@ def looks_like_missing_thread_error(message: str) -> bool:
     return "thread" in lowered and "not found" in lowered
 
 
-def resolve_agents_for_command(
+def resolve_cxsk_channels_for_command(
     repo_root: Path,
-    agent_name: str,
+    cxsk_channel_name: str,
     *,
     default_model: Optional[str],
     default_reasoning_effort: Optional[str],
-) -> tuple[SkillConfig, AgentConfig, Optional[str]]:
-    migration_notice = migrate_agents_config_to_latest(
+) -> tuple[CxskSkillConfig, CxskChannelConfig, Optional[str]]:
+    migration_notice = migrate_cxsk_channels_config_to_latest(
         repo_root,
         default_model=default_model,
         default_reasoning_effort=default_reasoning_effort,
     )
     config = read_skill_config(repo_root)
-    agent = find_agent(config.agents, agent_name)
-    if agent is None:
-        agent = build_agent_config(
-            agent_name,
+    cxsk_channel = find_cxsk_channel(config.cxsk_channels, cxsk_channel_name)
+    if cxsk_channel is None:
+        cxsk_channel = build_cxsk_channel_config(
+            cxsk_channel_name,
             model=default_model,
             reasoning_effort=default_reasoning_effort,
         )
-    return config, agent, migration_notice
+    return config, cxsk_channel, migration_notice
 
 
 def resolve_config_for_update(
@@ -2029,35 +2042,35 @@ def resolve_config_for_update(
     *,
     default_model: Optional[str],
     default_reasoning_effort: Optional[str],
-) -> tuple[SkillConfig, Optional[str], bool]:
-    migration_notice = migrate_agents_config_to_latest(
+) -> tuple[CxskSkillConfig, Optional[str], bool]:
+    migration_notice = migrate_cxsk_channels_config_to_latest(
         repo_root,
         default_model=default_model,
         default_reasoning_effort=default_reasoning_effort,
     )
-    config_path = agents_file_path(repo_root)
+    config_path = cxsk_channels_file_path(repo_root)
     created_canonical = False
     if config_path.exists():
         config = read_skill_config(repo_root)
     else:
-        config = default_skill_config([])
+        config = default_cxsk_skill_config([])
         write_skill_config(repo_root, config)
         created_canonical = True
     return config, migration_notice, created_canonical
 
 
-def persist_agents_for_command(
+def persist_cxsk_channels_for_command(
     repo_root: Path,
-    config: SkillConfig,
-    agent: AgentConfig,
+    config: CxskSkillConfig,
+    cxsk_channel: CxskChannelConfig,
 ) -> None:
     write_skill_config(
         repo_root,
-        SkillConfig(
+        CxskSkillConfig(
             version=CONFIG_VERSION,
-            caller=config.caller,
+            cxsk_invoker=config.cxsk_invoker,
             shared_stages=config.shared_stages,
-            agents=upsert_agent(config.agents, replace(agent, updated_at=iso_now())),
+            cxsk_channels=upsert_cxsk_channel(config.cxsk_channels, replace(cxsk_channel, updated_at=iso_now())),
             updated_at=iso_now(),
         ),
     )
@@ -2070,7 +2083,7 @@ def append_migration_notice(reply: str, migration_notice: Optional[str]) -> str:
     return (
         f"{normalized}\n\n---\n"
         f"Migration notice: {migration_notice}\n"
-        "Future calls now use the structured managed agent config automatically.\n"
+        "Future calls now use the structured managed cxsk_channel config automatically.\n"
     )
 
 
@@ -2235,29 +2248,38 @@ def try_promote_exec_session_to_cli(session_id: str) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(prog="codex-skill")
-    parser.add_argument(
+    shared_options = argparse.ArgumentParser(add_help=False)
+    shared_options.add_argument(
         "--cwd",
         default=None,
         help="Working directory used to locate the project session root.",
     )
-    parser.add_argument(
-        "--agent",
-        default=DEFAULT_AGENT_NAME,
-        help=f"Target agent name inside {MANAGED_DIRNAME}/{AGENTS_FILENAME} (default: default).",
+    shared_options.add_argument(
+        "--cxsk-channel",
+        default=DEFAULT_CXSK_CHANNEL_NAME,
+        dest="cxsk_channel",
+        help=f"Target cxsk_channel name inside {MANAGED_DIRNAME}/{CXSK_CHANNELS_FILENAME} (default: default).",
     )
-    parser.add_argument("--timeout-s", type=int, default=3600, help="codex exec timeout in seconds.")
-    parser.add_argument("--model", default=None, help="Optional model override for this call.")
-    parser.add_argument("--reasoning-effort", default=None, help="Optional reasoning effort override for this call.")
+    shared_options.add_argument("--timeout-s", type=int, default=3600, help="codex exec timeout in seconds.")
+    shared_options.add_argument("--model", default=None, help="Optional model override for this call.")
+    shared_options.add_argument("--reasoning-effort", default=None, help="Optional reasoning effort override for this call.")
+
+    parser = argparse.ArgumentParser(prog="codex-skill", parents=[shared_options])
 
     sub = parser.add_subparsers(dest="cmd", required=True)
     for name in TOOL_HELP:
-        sub.add_parser(name, help=TOOL_HELP[name])
+        sub.add_parser(name, help=TOOL_HELP[name], parents=[shared_options], add_help=False)
 
     args = parser.parse_args()
-    agent_name = normalize_optional_string(args.agent)
-    if not agent_name:
-        eprint("--agent must be a non-empty string.")
+    shared_args, _ = shared_options.parse_known_args(sys.argv[1:])
+    args.cwd = shared_args.cwd
+    args.cxsk_channel = shared_args.cxsk_channel
+    args.timeout_s = shared_args.timeout_s
+    args.model = shared_args.model
+    args.reasoning_effort = shared_args.reasoning_effort
+    cxsk_channel_name = normalize_optional_string(args.cxsk_channel)
+    if not cxsk_channel_name:
+        eprint("--cxsk-channel must be a non-empty string.")
         return 2
 
     cwd_explicit = args.cwd is not None
@@ -2277,8 +2299,8 @@ def main() -> int:
         lines = [
             "No project Codex session root is configured.",
             "Could not find an existing managed session anchor:",
-            f"  - <dir>/{MANAGED_DIRNAME}/{AGENTS_FILENAME}",
-            f"  - <dir>/{LEGACY_MANAGED_DIRNAME}/{AGENTS_FILENAME} (legacy, auto-migrated once)",
+            f"  - <dir>/{MANAGED_DIRNAME}/{CXSK_CHANNELS_FILENAME}",
+            f"  - <dir>/{LEGACY_MANAGED_DIRNAME}/{CXSK_CHANNELS_FILENAME} (legacy, auto-migrated once)",
             f"  - <dir>/{LEGACY_MANAGED_DIRNAME}/{LEGACY_SESSION_FILENAME} (legacy, auto-migrated once)",
             f"(excluding the global {MANAGED_GLOBAL_DIR} and {CLAUDE_GLOBAL_DIR} directories).",
             "",
@@ -2307,9 +2329,9 @@ def main() -> int:
             payload = parse_configure_payload(stdin_text)
             repo_root.mkdir(parents=True, exist_ok=True)
             (repo_root / MANAGED_DIRNAME).mkdir(parents=True, exist_ok=True)
-            config, _agent, migration_notice = resolve_agents_for_command(
+            config, _cxsk_channel, migration_notice = resolve_cxsk_channels_for_command(
                 repo_root,
-                agent_name,
+                cxsk_channel_name,
                 default_model=effective_default_model,
                 default_reasoning_effort=effective_default_reasoning_effort,
             )
@@ -2321,19 +2343,19 @@ def main() -> int:
 
         lines = [
             "configure applied.",
-            f"Target agent slot: {agent_name}",
-            f"Config path: {agents_file_path(repo_root)}",
+            f"Target cxsk_channel: {cxsk_channel_name}",
+            f"Config path: {cxsk_channels_file_path(repo_root)}",
         ]
-        if payload.caller_patch is not None:
-            lines.append("Updated: caller")
+        if payload.cxsk_invoker_patch is not None:
+            lines.append("Updated: cxsk_invoker")
         if payload.shared_stages_patch is not None:
             lines.append("Updated: shared_stages")
-        if payload.agents_patch is not None:
+        if payload.cxsk_channels_patch is not None:
             lines.append(
-                "Updated agents: " + ", ".join(patch["name"] for patch in payload.agents_patch)
+                "Updated cxsk_channels: " + ", ".join(patch["name"] for patch in payload.cxsk_channels_patch)
             )
         sys.stdout.write(
-            format_output_for_caller(
+            format_output_for_cxsk_invoker(
                 repo_root,
                 updated_config,
                 tool="configure",
@@ -2358,7 +2380,7 @@ def main() -> int:
             eprint(str(exc))
             return 1
 
-        channel_names = ", ".join(agent.name for agent in config.agents) if config.agents else "(none)"
+        cxsk_channel_names = ", ".join(cxsk_channel.name for cxsk_channel in config.cxsk_channels) if config.cxsk_channels else "(none)"
         if created_canonical:
             status_line = "Created a canonical managed config because no prior managed config was present."
         elif migration_notice:
@@ -2368,11 +2390,11 @@ def main() -> int:
         lines = [
             "update-config applied.",
             status_line,
-            f"Config path: {agents_file_path(repo_root)}",
-            f"Managed channels: {channel_names}",
+            f"Config path: {cxsk_channels_file_path(repo_root)}",
+            f"Managed cxsk_channels: {cxsk_channel_names}",
         ]
         sys.stdout.write(
-            format_output_for_caller(
+            format_output_for_cxsk_invoker(
                 repo_root,
                 config,
                 tool="update-config",
@@ -2388,24 +2410,24 @@ def main() -> int:
             payload = parse_dangerous_new_session_payload(stdin_text)
             repo_root.mkdir(parents=True, exist_ok=True)
             (repo_root / MANAGED_DIRNAME).mkdir(parents=True, exist_ok=True)
-            config, agent, migration_notice = resolve_agents_for_command(
+            config, cxsk_channel, migration_notice = resolve_cxsk_channels_for_command(
                 repo_root,
-                agent_name,
+                cxsk_channel_name,
                 default_model=effective_default_model,
                 default_reasoning_effort=effective_default_reasoning_effort,
             )
-            previous_session_id = agent.session_id
-            effective_model = payload.model or agent.model or effective_default_model
+            previous_session_id = cxsk_channel.session_id
+            effective_model = payload.model or cxsk_channel.model or effective_default_model
             effective_reasoning_effort = (
                 payload.reasoning_effort
-                or agent.reasoning_effort
+                or cxsk_channel.reasoning_effort
                 or effective_default_reasoning_effort
             )
-            next_description = payload.agent_description or agent.description
+            next_description = payload.cxsk_channel_description or cxsk_channel.description
             if payload.target_session_id:
                 current_session_id = payload.target_session_id
                 previous_session_ids = update_previous_session_ids_for_replacement(
-                    agent.previous_session_ids,
+                    cxsk_channel.previous_session_ids,
                     previous_session_id,
                     current_session_id,
                 )
@@ -2424,50 +2446,50 @@ def main() -> int:
                 current_session_id = result.session_id
                 try_promote_exec_session_to_cli(current_session_id)
                 previous_session_ids = update_previous_session_ids_for_replacement(
-                    agent.previous_session_ids,
+                    cxsk_channel.previous_session_ids,
                     previous_session_id,
                     current_session_id,
                 )
                 switched_to_existing = False
-            updated_agent = build_agent_config(
-                agent.name,
+            updated_cxsk_channel = build_cxsk_channel_config(
+                cxsk_channel.name,
                 description=next_description,
-                focus=agent.focus,
-                baseline=agent.baseline,
-                extra_context=agent.extra_context,
-                stage_guidance=agent.stage_guidance,
-                can_mutate=agent.can_mutate,
+                focus=cxsk_channel.focus,
+                baseline=cxsk_channel.baseline,
+                extra_context=cxsk_channel.extra_context,
+                stage_guidance=cxsk_channel.stage_guidance,
+                can_mutate=cxsk_channel.can_mutate,
                 session_id=current_session_id,
                 model=effective_model,
                 reasoning_effort=effective_reasoning_effort,
                 previous_session_ids=previous_session_ids,
                 reminder_turn_count=0,
             )
-            persist_agents_for_command(repo_root, config, updated_agent)
+            persist_cxsk_channels_for_command(repo_root, config, updated_cxsk_channel)
         except Exception as exc:
             eprint(str(exc))
             return 1
 
         lines = [
             "dangerous-new-session authorized.",
-            f"Target agent: {agent_name}",
+            f"Target cxsk_channel: {cxsk_channel_name}",
             (
-                f"Managed agent now points to target session id: {current_session_id}"
+                f"Managed cxsk_channel now points to target session id: {current_session_id}"
                 if switched_to_existing
-                else f"Managed agent now points to fresh session id: {current_session_id}"
+                else f"Managed cxsk_channel now points to fresh session id: {current_session_id}"
             ),
-            "Do not call raw `codex` directly and do not edit the managed agent config manually.",
+            "Do not call raw `codex` directly and do not edit the managed cxsk_channel config manually.",
         ]
         if previous_session_ids:
             lines.append(
-                "Recorded previous session ids for this agent (newest first): "
+                "Recorded previous session ids for this cxsk_channel (newest first): "
                 + ", ".join(previous_session_ids)
             )
         else:
-            lines.append("There was no prior managed session id for this agent to record.")
+            lines.append("There was no prior managed session id for this cxsk_channel to record.")
         updated_config = read_skill_config(repo_root)
         sys.stdout.write(
-            format_output_for_caller(
+            format_output_for_cxsk_invoker(
                 repo_root,
                 updated_config,
                 tool="dangerous-new-session",
@@ -2479,9 +2501,9 @@ def main() -> int:
         return 0
 
     try:
-        config, agent, migration_notice = resolve_agents_for_command(
+        config, cxsk_channel, migration_notice = resolve_cxsk_channels_for_command(
             repo_root,
-            agent_name,
+            cxsk_channel_name,
             default_model=effective_default_model,
             default_reasoning_effort=effective_default_reasoning_effort,
         )
@@ -2489,20 +2511,20 @@ def main() -> int:
         eprint(str(exc))
         return 1
 
-    session_id = agent.session_id
-    model = args.model or agent.model or DEFAULT_MODEL
-    reasoning_effort = args.reasoning_effort or agent.reasoning_effort or DEFAULT_REASONING_EFFORT
+    session_id = cxsk_channel.session_id
+    model = args.model or cxsk_channel.model or DEFAULT_MODEL
+    reasoning_effort = args.reasoning_effort or cxsk_channel.reasoning_effort or DEFAULT_REASONING_EFFORT
     init_mode: Optional[str] = None
-    turn_index = collaborative_turn_index(args.cmd, agent)
+    turn_index = collaborative_turn_index(args.cmd, cxsk_channel)
     full_reminder = should_use_full_reminder(args.cmd, turn_index)
 
-    if args.cmd == "request-mutation" and not agent.can_mutate:
+    if args.cmd == "request-mutation" and not cxsk_channel.can_mutate:
         eprint(
             "\n".join(
                 [
-                    f"Channel '{agent.name}' is configured with can_mutate: false.",
-                    "request-mutation is only allowed for a mutate-capable channel.",
-                    "Choose a different channel or update the channel config through configure.",
+                    f"CXSK channel '{cxsk_channel.name}' is configured with can_mutate: false.",
+                    "request-mutation is only allowed for a mutate-capable cxsk_channel.",
+                    "Choose a different cxsk_channel or update the cxsk_channel config through configure.",
                 ]
             )
         )
@@ -2510,12 +2532,12 @@ def main() -> int:
 
     try:
         if args.cmd == "init":
-            prompt, init_mode = build_init_prompt(repo_root, config, agent, stdin_text)
+            prompt, init_mode = build_init_prompt(repo_root, config, cxsk_channel, stdin_text)
         else:
             prompt = build_prompt(
                 repo_root,
                 config,
-                agent,
+                cxsk_channel,
                 args.cmd,
                 stdin_text,
                 full_reminder=full_reminder,
@@ -2537,8 +2559,8 @@ def main() -> int:
                     [
                         str(exc),
                         "",
-                        f"The managed agent '{agent_name}' has a stored session id locally, but Codex could not resume it.",
-                        "Do not manually delete or replace the managed agent config and do not call raw `codex` directly.",
+                        f"The managed cxsk_channel '{cxsk_channel_name}' has a stored session id locally, but Codex could not resume it.",
+                        "Do not manually delete or replace the managed cxsk_channel config and do not call raw `codex` directly.",
                         "If the user explicitly wants to abandon this continuity and start fresh, run "
                         "<skill_root>/bin/codex-skill-dangerous-new-session.",
                     ]
@@ -2548,21 +2570,21 @@ def main() -> int:
             eprint(str(exc))
         return 1
 
-    updated_agent = replace(
-        agent,
+    updated_cxsk_channel = replace(
+        cxsk_channel,
         session_id=result.session_id,
-        model=agent.model or model,
-        reasoning_effort=agent.reasoning_effort or reasoning_effort,
+        model=cxsk_channel.model or model,
+        reasoning_effort=cxsk_channel.reasoning_effort or reasoning_effort,
         reminder_turn_count=(
             0
             if args.cmd == "init"
-            else agent.reminder_turn_count + 1
+            else cxsk_channel.reminder_turn_count + 1
             if args.cmd in {"chat", "review-my-plan", "review-my-work", "work-sync", "request-mutation"}
-            else agent.reminder_turn_count
+            else cxsk_channel.reminder_turn_count
         ),
         updated_at=iso_now(),
     )
-    persist_agents_for_command(repo_root, config, updated_agent)
+    persist_cxsk_channels_for_command(repo_root, config, updated_cxsk_channel)
     try_promote_exec_session_to_cli(result.session_id)
 
     if init_mode is not None:
@@ -2591,7 +2613,7 @@ def main() -> int:
             return 1
 
     sys.stdout.write(
-        format_output_for_caller(
+        format_output_for_cxsk_invoker(
             repo_root,
             config,
             tool=args.cmd,

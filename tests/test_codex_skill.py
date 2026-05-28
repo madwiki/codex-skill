@@ -11,7 +11,7 @@ from typing import Optional, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "bin" / "codex_skill.py"
-AGENTS_FILENAME = "codex_agents.json"
+CHANNELS_FILENAME = "cxsk_channels.json"
 LEGACY_SESSION_FILENAME = "codex_session.json"
 LEGACY_HISTORY_FILENAME = "codex_session_history.json"
 MANAGED_DIRNAME = ".codex-skill"
@@ -67,7 +67,7 @@ FAKE_CODEX_SOURCE = textwrap.dedent(
 class CodexSkillIntegrationTests(unittest.TestCase):
     maxDiff = None
 
-    def build_agent(
+    def build_cxsk_channel(
         self,
         name: str,
         *,
@@ -85,7 +85,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
     ) -> dict:
         return {
             "name": name,
-            "description": description or f"Agent {name}",
+            "description": description or f"Managed CXSK channel '{name}'.",
             "focus": focus,
             "baseline": baseline,
             "extra_context": extra_context,
@@ -101,14 +101,14 @@ class CodexSkillIntegrationTests(unittest.TestCase):
 
     def build_config(
         self,
-        agents: list[dict],
+        cxsk_channels: list[dict],
         *,
-        caller: Optional[dict] = None,
+        cxsk_invoker: Optional[dict] = None,
         shared_stages: Optional[dict[str, str]] = None,
     ) -> dict:
         return {
-            "version": 4,
-            "caller": caller or {
+            "version": 5,
+            "cxsk_invoker": cxsk_invoker or {
                 "baseline": None,
                 "working_style": None,
                 "extra_context": None,
@@ -116,7 +116,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
                 "can_mutate": True,
             },
             "shared_stages": shared_stages or {},
-            "agents": agents,
+            "cxsk_channels": cxsk_channels,
             "updated_at": "2026-05-26T00:00:00Z",
         }
 
@@ -126,10 +126,10 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         payload: str,
         reply: str = "",
         *,
-        agent_name: str = "default",
+        cxsk_channel_name: str = "default",
         initial_config: Optional[dict] = None,
         initial_legacy_config: Optional[dict] = None,
-        initial_agents: Optional[list[dict]] = None,
+        initial_cxsk_channels: Optional[list[dict]] = None,
         legacy_session_id: Optional[str] = None,
         legacy_history_ids: Optional[list[str]] = None,
         error: Optional[str] = None,
@@ -153,18 +153,18 @@ class CodexSkillIntegrationTests(unittest.TestCase):
                     path.write_text(content, encoding="utf-8")
 
             if initial_config is not None:
-                (managed_dir / AGENTS_FILENAME).write_text(
+                (managed_dir / CHANNELS_FILENAME).write_text(
                     json.dumps(initial_config, ensure_ascii=False, indent=2) + "\n",
                     encoding="utf-8",
                 )
             if initial_legacy_config is not None:
-                (legacy_dir / AGENTS_FILENAME).write_text(
+                (legacy_dir / CHANNELS_FILENAME).write_text(
                     json.dumps(initial_legacy_config, ensure_ascii=False, indent=2) + "\n",
                     encoding="utf-8",
                 )
-            elif initial_agents is not None:
-                (managed_dir / AGENTS_FILENAME).write_text(
-                    json.dumps(self.build_config(initial_agents), ensure_ascii=False, indent=2) + "\n",
+            elif initial_cxsk_channels is not None:
+                (managed_dir / CHANNELS_FILENAME).write_text(
+                    json.dumps(self.build_config(initial_cxsk_channels), ensure_ascii=False, indent=2) + "\n",
                     encoding="utf-8",
                 )
 
@@ -195,7 +195,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
             if env_extra:
                 env.update(env_extra)
 
-            argv = [sys.executable, str(SCRIPT), "--cwd", str(workspace), "--agent", agent_name]
+            argv = [sys.executable, str(SCRIPT), "--cwd", str(workspace), "--cxsk-channel", cxsk_channel_name]
             if extra_args:
                 argv.extend(extra_args)
             argv.append(cmd)
@@ -213,10 +213,10 @@ class CodexSkillIntegrationTests(unittest.TestCase):
             if capture_path.exists():
                 capture = json.loads(capture_path.read_text(encoding="utf-8"))
 
-            agents_path = managed_dir / AGENTS_FILENAME
+            agents_path = managed_dir / CHANNELS_FILENAME
             state = {
-                "agents_exists": agents_path.exists(),
-                "agents_payload": (
+                "cxsk_channels_exists": agents_path.exists(),
+                "cxsk_channels_payload": (
                     json.loads(agents_path.read_text(encoding="utf-8")) if agents_path.exists() else None
                 ),
                 "legacy_session_exists": (legacy_dir / LEGACY_SESSION_FILENAME).exists(),
@@ -230,20 +230,20 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         return argv[index + 1]
 
     @staticmethod
-    def find_agent(state: dict, name: str) -> dict:
-        agents_payload = state["agents_payload"] or {}
-        agents = agents_payload.get("agents", [])
-        for agent in agents:
-            if agent["name"] == name:
-                return agent
-        raise AssertionError(f"Agent not found in state: {name}")
+    def find_cxsk_channel(state: dict, name: str) -> dict:
+        cxsk_channels_payload = state["cxsk_channels_payload"] or {}
+        cxsk_channels = cxsk_channels_payload.get("cxsk_channels", [])
+        for cxsk_channel in cxsk_channels:
+            if cxsk_channel["name"] == name:
+                return cxsk_channel
+        raise AssertionError(f"CXSK channel not found in state: {name}")
 
     def test_existing_agent_session_is_resumed_by_default(self) -> None:
         proc, capture, _state = self.run_skill(
             "review-my-plan",
             '{"plan_for_review":"Change only the prompt parser and update tests."}',
             "approved_to_mutate: true\n\n## Plan Review Reply\n\nBoundary is acceptable.",
-            initial_agents=[self.build_agent("default", session_id="resume-me")],
+            initial_cxsk_channels=[self.build_cxsk_channel("default", session_id="resume-me")],
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         assert capture is not None
@@ -260,10 +260,10 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         assert capture is not None
         self.assertNotIn("resume", capture["argv"])
-        self.assertTrue(state["agents_exists"])
-        agent = self.find_agent(state, "default")
-        self.assertEqual(agent["session_id"], "test-session")
-        self.assertEqual(agent["name"], "default")
+        self.assertTrue(state["cxsk_channels_exists"])
+        cxsk_channel = self.find_cxsk_channel(state, "default")
+        self.assertEqual(cxsk_channel["session_id"], "test-session")
+        self.assertEqual(cxsk_channel["name"], "default")
 
     def test_legacy_single_session_is_migrated_once_before_resume(self) -> None:
         proc, capture, state = self.run_skill(
@@ -279,11 +279,11 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         self.assertIn("legacy-session", capture["argv"])
         self.assertIn("Migration notice:", proc.stdout)
         self.assertIn("Legacy session continuity files were read, normalized, and rewritten into the canonical config", proc.stdout)
-        agent = self.find_agent(state, "default")
-        self.assertEqual(agent["session_id"], "legacy-session")
-        self.assertEqual(agent["previous_session_ids"], ["older-session", "oldest-session"])
+        cxsk_channel = self.find_cxsk_channel(state, "default")
+        self.assertEqual(cxsk_channel["session_id"], "legacy-session")
+        self.assertEqual(cxsk_channel["previous_session_ids"], ["older-session", "oldest-session"])
 
-    def test_legacy_structured_config_is_migrated_to_version_4(self) -> None:
+    def test_legacy_structured_config_is_migrated_to_version_5(self) -> None:
         legacy_config = {
             "version": 2,
             "claude": {
@@ -307,8 +307,8 @@ class CodexSkillIntegrationTests(unittest.TestCase):
                     "stages": {}
                 },
             },
-            "agents": [
-                self.build_agent("default", session_id="legacy-structured-session"),
+            "cxsk_channels": [
+                self.build_cxsk_channel("default", session_id="legacy-structured-session"),
             ],
         }
         proc, capture, state = self.run_skill(
@@ -324,49 +324,49 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         self.assertIn("Migration notice:", proc.stdout)
         self.assertIn("was read, normalized, and rewritten into the canonical config", proc.stdout)
         self.assertIn("User-authored reminder text was left unchanged.", proc.stdout)
-        payload = state["agents_payload"]
+        payload = state["cxsk_channels_payload"]
         assert payload is not None
-        self.assertEqual(payload["version"], 4)
-        self.assertIn("caller", payload)
+        self.assertEqual(payload["version"], 5)
+        self.assertIn("cxsk_invoker", payload)
         self.assertNotIn("claude", payload)
-        self.assertEqual(payload["caller"]["baseline"], "Keep the original task stable.")
-        self.assertTrue(payload["caller"]["can_mutate"])
+        self.assertEqual(payload["cxsk_invoker"]["baseline"], "Keep the original task stable.")
+        self.assertTrue(payload["cxsk_invoker"]["can_mutate"])
         self.assertNotIn("work_modes", payload)
 
-    def test_named_agent_is_created_when_selected(self) -> None:
+    def test_named_cxsk_channel_is_created_when_selected(self) -> None:
         proc, _capture, state = self.run_skill(
             "init",
             '{"task_background":"Current task brief"}',
             "## Task Understanding Reply\n\nSwitch to Codex-owned execution.",
-            agent_name="reviewer-a",
+            cxsk_channel_name="reviewer-a",
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        agent = self.find_agent(state, "reviewer-a")
-        self.assertEqual(agent["session_id"], "test-session")
-        self.assertEqual(agent["description"], "Codex collaboration channel 'reviewer-a'.")
+        cxsk_channel = self.find_cxsk_channel(state, "reviewer-a")
+        self.assertEqual(cxsk_channel["session_id"], "test-session")
+        self.assertEqual(cxsk_channel["description"], "Managed CXSK channel 'reviewer-a'.")
 
-    def test_effective_defaults_are_persisted_for_new_agent(self) -> None:
+    def test_effective_defaults_are_persisted_for_new_cxsk_channel(self) -> None:
         proc, _capture, state = self.run_skill(
             "init",
             '{"task_background":"Current task brief"}',
             "## Task Understanding Reply\n\nLooks consistent.",
-            agent_name="baseline",
+            cxsk_channel_name="baseline",
             env_extra={
                 "CODEX_MODEL": "gpt-test",
                 "CODEX_REASONING_EFFORT": "high",
             },
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        agent = self.find_agent(state, "baseline")
-        self.assertEqual(agent["model"], "gpt-test")
-        self.assertEqual(agent["reasoning_effort"], "high")
+        cxsk_channel = self.find_cxsk_channel(state, "baseline")
+        self.assertEqual(cxsk_channel["model"], "gpt-test")
+        self.assertEqual(cxsk_channel["reasoning_effort"], "high")
 
-    def test_configure_updates_caller_and_agent_fields(self) -> None:
+    def test_configure_updates_cxsk_invoker_and_cxsk_channel_fields(self) -> None:
         proc, _capture, state = self.run_skill(
             "configure",
             json.dumps(
                 {
-                    "caller": {
+                    "cxsk_invoker": {
                         "baseline": "Keep original requirements stable.",
                     "working_style": "Discuss before mutating.",
                     "stage_guidance": {
@@ -377,7 +377,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
                 "shared_stages": {
                     "init": "Always re-check continuity assumptions."
                 },
-                    "agents": [
+                    "cxsk_channels": [
                         {
                             "name": "reviewer-a",
                             "focus": "Watch for architectural drift.",
@@ -393,15 +393,15 @@ class CodexSkillIntegrationTests(unittest.TestCase):
                 },
                 ensure_ascii=False,
             ),
-            initial_agents=[self.build_agent("default", session_id="existing-session")],
+            initial_cxsk_channels=[self.build_cxsk_channel("default", session_id="existing-session")],
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        payload = state["agents_payload"]
+        payload = state["cxsk_channels_payload"]
         assert payload is not None
-        self.assertEqual(payload["caller"]["baseline"], "Keep original requirements stable.")
-        self.assertFalse(payload["caller"]["can_mutate"])
+        self.assertEqual(payload["cxsk_invoker"]["baseline"], "Keep original requirements stable.")
+        self.assertFalse(payload["cxsk_invoker"]["can_mutate"])
         self.assertEqual(payload["shared_stages"]["init"], "Always re-check continuity assumptions.")
-        reviewer = self.find_agent(state, "reviewer-a")
+        reviewer = self.find_cxsk_channel(state, "reviewer-a")
         self.assertEqual(reviewer["focus"], "Watch for architectural drift.")
         self.assertFalse(reviewer["can_mutate"])
         self.assertEqual(reviewer["model"], "gpt-review")
@@ -412,11 +412,11 @@ class CodexSkillIntegrationTests(unittest.TestCase):
             "",
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertTrue(state["agents_exists"])
-        payload = state["agents_payload"]
+        self.assertTrue(state["cxsk_channels_exists"])
+        payload = state["cxsk_channels_payload"]
         assert payload is not None
-        self.assertEqual(payload["version"], 4)
-        self.assertEqual(payload["agents"], [])
+        self.assertEqual(payload["version"], 5)
+        self.assertEqual(payload["cxsk_channels"], [])
         self.assertIn("update-config applied.", proc.stdout)
         self.assertIn("Created a canonical managed config because no prior managed config was present.", proc.stdout)
 
@@ -425,8 +425,8 @@ class CodexSkillIntegrationTests(unittest.TestCase):
             "review-my-plan",
             '{"plan_for_review":"Review the plan against [[REF:.codex-skill/refs/rules.md::Rule 5]]."}',
             "approved_to_mutate: true\n\n## Plan Review Reply\n\nLooks acceptable.",
-            initial_agents=[
-                self.build_agent(
+            initial_cxsk_channels=[
+                self.build_cxsk_channel(
                     "default",
                     session_id="existing-session",
                     focus="Watch for drift against [[REF:.codex-skill/refs/rules.md::Rule 5]].",
@@ -444,21 +444,21 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         self.assertIn("## User Reminder (Full)", capture["stdin"])
         self.assertIn("## Reference Handling Notice", capture["stdin"])
         self.assertIn("[[REF:.codex-skill/refs/rules.md::Rule 5]]", capture["stdin"])
-        self.assertIn("### Agent Focus", capture["stdin"])
-        self.assertIn("### Agent Stage Guidance", capture["stdin"])
+        self.assertIn("### CXSK Channel Focus", capture["stdin"])
+        self.assertIn("### CXSK Channel Stage Guidance", capture["stdin"])
 
     def test_caller_side_guidance_is_not_sent_to_codex_but_is_returned_to_caller(self) -> None:
         initial_config = self.build_config(
             [
-                self.build_agent(
+                self.build_cxsk_channel(
                     "default",
                     session_id="existing-session",
                     focus="Watch for architectural drift.",
                     baseline="Keep the original requirements stable.",
                 )
             ],
-            caller={
-                "baseline": "The caller must keep the original user constraints stable.",
+            cxsk_invoker={
+                "baseline": "The cxsk_invoker must keep the original user constraints stable.",
                 "working_style": "Use Codex Skill, not raw Codex.",
                 "extra_context": None,
                 "stage_guidance": {
@@ -478,23 +478,23 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         assert capture is not None
-        self.assertNotIn("## Caller Baseline", capture["stdin"])
-        self.assertNotIn("## Caller Working Style", capture["stdin"])
-        self.assertNotIn("## Caller Stage Guidance", capture["stdin"])
+        self.assertNotIn("## CXSK Invoker Baseline", capture["stdin"])
+        self.assertNotIn("## CXSK Invoker Working Style", capture["stdin"])
+        self.assertNotIn("## CXSK Invoker Stage Guidance", capture["stdin"])
         self.assertIn("### Shared Stage Guidance", capture["stdin"])
         self.assertIn("## Codex Skill Reminder (Full)", proc.stdout)
         self.assertIn("## User Reminder (Full)", proc.stdout)
-        self.assertIn("### Caller Baseline", proc.stdout)
-        self.assertIn("### Caller Working Style", proc.stdout)
-        self.assertIn("### Caller Mutation Permission", proc.stdout)
-        self.assertIn("### Caller Stage Guidance", proc.stdout)
+        self.assertIn("### CXSK Invoker Baseline", proc.stdout)
+        self.assertIn("### CXSK Invoker Working Style", proc.stdout)
+        self.assertIn("### CXSK Invoker Mutation Permission", proc.stdout)
+        self.assertIn("### CXSK Invoker Stage Guidance", proc.stdout)
         self.assertIn("### Shared Stage Guidance", proc.stdout)
         self.assertIn("## Codex Reply", proc.stdout)
 
     def test_non_init_turns_use_full_then_brief_reminder_cadence(self) -> None:
         initial_config = self.build_config(
             [
-                self.build_agent(
+                self.build_cxsk_channel(
                     "default",
                     session_id="existing-session",
                     focus="Watch for architectural drift.",
@@ -502,7 +502,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
                     reminder_turn_count=1,
                 )
             ],
-            caller={
+            cxsk_invoker={
                 "baseline": "Caller baseline text.",
                 "working_style": "Caller working style.",
                 "extra_context": None,
@@ -521,12 +521,12 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         self.assertIn("## Codex Skill Reminder (Brief)", capture["stdin"])
         self.assertIn("## User Reminder (Brief)", capture["stdin"])
         self.assertIn("configured User Reminder still applies".lower(), capture["stdin"].lower())
-        self.assertNotIn("### Agent Focus", capture["stdin"])
+        self.assertNotIn("### CXSK Channel Focus", capture["stdin"])
         self.assertIn("## Codex Skill Reminder (Brief)", proc.stdout)
         self.assertIn("## User Reminder (Brief)", proc.stdout)
-        self.assertNotIn("### Caller Baseline", proc.stdout)
-        agent = self.find_agent(state, "default")
-        self.assertEqual(agent["reminder_turn_count"], 2)
+        self.assertNotIn("### CXSK Invoker Baseline", proc.stdout)
+        cxsk_channel = self.find_cxsk_channel(state, "default")
+        self.assertEqual(cxsk_channel["reminder_turn_count"], 2)
 
     def test_review_my_work_reminder_warns_not_to_stop_after_step_pass(self) -> None:
         proc, _capture, _state = self.run_skill(
@@ -542,7 +542,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         proc, _capture, _state = self.run_skill(
             "chat",
             '{"message_for_codex":"Please keep [[REF:.codex-skill/refs/missing.md::Rule 2]] in mind."}',
-            initial_agents=[self.build_agent("default", session_id="existing-session")],
+            initial_cxsk_channels=[self.build_cxsk_channel("default", session_id="existing-session")],
         )
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("Referenced file does not exist", proc.stderr)
@@ -552,30 +552,30 @@ class CodexSkillIntegrationTests(unittest.TestCase):
             "dangerous-new-session",
             '{"user_permission":"The user explicitly asked to abandon the old Codex continuity and start fresh."}',
             "fresh managed session ready.",
-            agent_name="reviewer-a",
-            initial_agents=[
-                self.build_agent("default", session_id="default-session", previous_session_ids=["older-default"]),
-                self.build_agent("reviewer-a", session_id="old-session", previous_session_ids=["older-session", "oldest-session"]),
+            cxsk_channel_name="reviewer-a",
+            initial_cxsk_channels=[
+                self.build_cxsk_channel("default", session_id="default-session", previous_session_ids=["older-default"]),
+                self.build_cxsk_channel("reviewer-a", session_id="old-session", previous_session_ids=["older-session", "oldest-session"]),
             ],
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         assert capture is not None
         self.assertEqual(self.sandbox_from_argv(capture["argv"]), "read-only")
         self.assertNotIn("resume", capture["argv"])
-        reviewer = self.find_agent(state, "reviewer-a")
+        reviewer = self.find_cxsk_channel(state, "reviewer-a")
         self.assertEqual(reviewer["session_id"], "test-session")
         self.assertEqual(reviewer["previous_session_ids"], ["old-session", "older-session"])
-        default = self.find_agent(state, "default")
+        default = self.find_cxsk_channel(state, "default")
         self.assertEqual(default["session_id"], "default-session")
-        self.assertIn("Target agent: reviewer-a", proc.stdout)
+        self.assertIn("Target cxsk_channel: reviewer-a", proc.stdout)
 
     def test_dangerous_new_session_can_switch_target_session_id_and_update_saved_settings(self) -> None:
         proc, capture, state = self.run_skill(
             "dangerous-new-session",
-            '{"user_permission":"The user explicitly asked to switch back to a specific prior Codex session.","target_session_id":"restored-session","agent_description":"Reviewer A for plan gate.","model":"gpt-review","reasoning_effort":"medium"}',
-            agent_name="reviewer-a",
-            initial_agents=[
-                self.build_agent(
+            '{"user_permission":"The user explicitly asked to switch back to a specific prior Codex session.","target_session_id":"restored-session","cxsk_channel_description":"Reviewer A for plan gate.","model":"gpt-review","reasoning_effort":"medium"}',
+            cxsk_channel_name="reviewer-a",
+            initial_cxsk_channels=[
+                self.build_cxsk_channel(
                     "reviewer-a",
                     description="Old description",
                     session_id="current-session",
@@ -587,7 +587,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIsNone(capture)
-        reviewer = self.find_agent(state, "reviewer-a")
+        reviewer = self.find_cxsk_channel(state, "reviewer-a")
         self.assertEqual(reviewer["session_id"], "restored-session")
         self.assertEqual(reviewer["description"], "Reviewer A for plan gate.")
         self.assertEqual(reviewer["model"], "gpt-review")
@@ -599,12 +599,12 @@ class CodexSkillIntegrationTests(unittest.TestCase):
             "work-sync",
             '{"sync_message":"Please respond to the current review feedback."}',
             "## Discussion Reply\n\nI agree with the concern.\n\n## Plan\n\nRepair the parser first.",
-            initial_agents=[self.build_agent("default", session_id="existing-session")],
+            initial_cxsk_channels=[self.build_cxsk_channel("default", session_id="existing-session")],
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         assert capture is not None
         self.assertEqual(self.sandbox_from_argv(capture["argv"]), "read-only")
-        self.assertIn("Sync message from the caller:", capture["stdin"])
+        self.assertIn("Sync message from the cxsk_invoker:", capture["stdin"])
         self.assertIn("## Plan", proc.stdout)
 
     def test_request_mutation_defaults_to_workspace_write(self) -> None:
@@ -612,58 +612,58 @@ class CodexSkillIntegrationTests(unittest.TestCase):
             "request-mutation",
             '{"approved_mutation":"Implement the approved parser fix and stop."}',
             "Updated parser, ran validation, stopped for review.",
-            initial_agents=[self.build_agent("default", session_id="existing-session")],
+            initial_cxsk_channels=[self.build_cxsk_channel("default", session_id="existing-session")],
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         assert capture is not None
         self.assertEqual(self.sandbox_from_argv(capture["argv"]), "workspace-write")
         self.assertIn("workspace-write (default mutation sandbox)", capture["stdin"])
-        self.assertIn("Approved mutation from the caller:", capture["stdin"])
+        self.assertIn("Approved mutation from the cxsk_invoker:", capture["stdin"])
 
     def test_request_mutation_full_access_escalates_to_danger_full_access(self) -> None:
         proc, capture, _state = self.run_skill(
             "request-mutation",
             '{"approved_mutation":"Run the approved repair step.","sandbox_mode":"full-access"}',
             "Ran the approved repair under full access and stopped.",
-            initial_agents=[self.build_agent("default", session_id="existing-session")],
+            initial_cxsk_channels=[self.build_cxsk_channel("default", session_id="existing-session")],
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         assert capture is not None
         self.assertEqual(self.sandbox_from_argv(capture["argv"]), "danger-full-access")
         self.assertIn(
-            "danger-full-access (explicit full-access escalation approved by the caller)",
+            "danger-full-access (explicit full-access escalation approved by the cxsk_invoker)",
             capture["stdin"],
         )
 
-    def test_request_mutation_rejects_non_mutating_channel(self) -> None:
+    def test_request_mutation_rejects_non_mutating_cxsk_channel(self) -> None:
         proc, _capture, _state = self.run_skill(
             "request-mutation",
             '{"approved_mutation":"Implement the approved parser fix and stop."}',
-            initial_agents=[self.build_agent("reviewer-a", session_id="existing-session", can_mutate=False)],
-            agent_name="reviewer-a",
+            initial_cxsk_channels=[self.build_cxsk_channel("reviewer-a", session_id="existing-session", can_mutate=False)],
+            cxsk_channel_name="reviewer-a",
         )
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("can_mutate: false", proc.stderr)
-        self.assertIn("mutate-capable channel", proc.stderr)
+        self.assertIn("mutate-capable cxsk_channel", proc.stderr)
 
     def test_missing_thread_error_requires_explicit_dangerous_reset(self) -> None:
         proc, _capture, _state = self.run_skill(
             "review-my-work",
             '{"work_for_review":"Please review the completed work."}',
-            initial_agents=[self.build_agent("default", session_id="stale-session")],
+            initial_cxsk_channels=[self.build_cxsk_channel("default", session_id="stale-session")],
             error="thread stale-session not found",
         )
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("could not resume", proc.stderr)
         self.assertIn("dangerous-new-session", proc.stderr)
-        self.assertIn("managed agent 'default'", proc.stderr)
+        self.assertIn("managed cxsk_channel 'default'", proc.stderr)
 
     def test_review_my_plan_rejects_legacy_json_reply(self) -> None:
         proc, _capture, _state = self.run_skill(
             "review-my-plan",
             '{"plan_for_review":"Change only the prompt parser and update tests."}',
             '{"approved_to_mutate":true,"plan_review_reply":"legacy json"}',
-            initial_agents=[self.build_agent("default", session_id="existing-session")],
+            initial_cxsk_channels=[self.build_cxsk_channel("default", session_id="existing-session")],
         )
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("approved_to_mutate must be the first non-empty line", proc.stderr)
