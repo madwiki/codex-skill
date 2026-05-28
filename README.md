@@ -34,7 +34,7 @@ Top-level keys:
 Important behavior:
 
 - `cxsk_invoker.can_mutate` is reminder-only.
-- `cxsk_channels[*].can_mutate` is enforced for `request-mutation`.
+- `cxsk_channels[*].can_mutate` is enforced for `execute-this-plan` and `execute-this-plan-part`.
 - `cxsk_invoker.*` is returned to the cxsk_invoker, not injected into Codex prompts.
 - `cxsk_channels[*].*` is injected only into the targeted Codex prompt.
 - `shared_stages` may be shown on both sides.
@@ -42,11 +42,11 @@ Important behavior:
 ## Commands
 
 - `bin/codex-skill-init`
-- `bin/codex-skill-chat`
-- `bin/codex-skill-review-my-plan`
-- `bin/codex-skill-review-my-work`
-- `bin/codex-skill-work-sync`
-- `bin/codex-skill-request-mutation`
+- `bin/codex-skill-sync`
+- `bin/codex-skill-review-this-plan`
+- `bin/codex-skill-review-this-work`
+- `bin/codex-skill-execute-this-plan`
+- `bin/codex-skill-execute-this-plan-part`
 - `bin/codex-skill-configure`
 - `bin/codex-skill-update-config`
 - `bin/codex-skill-dangerous-new-session`

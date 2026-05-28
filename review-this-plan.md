@@ -1,6 +1,6 @@
-# review-my-plan
+# review-this-plan
 
-Use this before any approved mutation step begins.
+Use this to review a submitted plan before any execution begins.
 
 This is a hard gate. The cxsk_invoker must not treat discussion as approval.
 

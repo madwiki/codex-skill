@@ -1,10 +1,10 @@
-# review-my-work
+# review-this-work
 
-Use this after state-changing work has happened and before the cxsk_invoker treats that work as accepted or delivered.
+Use this after execution work has happened and before the cxsk_invoker treats that work as accepted or delivered.
 
 This is a hard gate.
 
-`approved_work: true` accepts the reviewed step only. If more agreed steps remain, continue to the next step instead of stopping.
+`approved_work: true` accepts the reviewed execution scope only. If more agreed plan scope remains, continue instead of stopping.
 
 ## Input contract
 

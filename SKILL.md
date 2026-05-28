@@ -45,7 +45,7 @@ Top-level fields:
 
 `cxsk_invoker.can_mutate` is a reminder field only. The wrapper cannot enforce it because the cxsk_invoker is outside the managed Codex runtime.
 
-`cxsk_channels[*].can_mutate` is enforced. Only cxsk_channels with `can_mutate: true` may use `request-mutation`.
+`cxsk_channels[*].can_mutate` is enforced. Only cxsk_channels with `can_mutate: true` may use `execute-this-plan` or `execute-this-plan-part`.
 
 ## Injection boundaries
 
@@ -91,20 +91,20 @@ Use only one command per current workflow need.
 | Patch cxsk_invoker guidance, shared stage guidance, or cxsk_channel metadata | `configure.md` |
 | Normalize existing managed state and rewrite the canonical config | `update-config.md` |
 | Bootstrap a new shared task or recover after compact/context clear | `init.md` |
-| General discussion, sync, disagreement handling, or context clarification | `chat.md` |
-| Review a proposed plan before any approved mutation step begins | `review-my-plan.md` |
-| Review completed work before treating it as accepted or delivered | `review-my-work.md` |
-| Non-mutation sync turn for a managed Codex cxsk_channel | `work-sync.md` |
-| Execute one approved mutation step on a mutate-capable cxsk_channel | `request-mutation.md` |
+| General discussion, coordination, disagreement handling, or review relay | `sync.md` |
+| Review a submitted plan before any execution begins | `review-this-plan.md` |
+| Review completed execution work before treating it as accepted or delivered | `review-this-work.md` |
+| Execute one approved whole plan on a mutate-capable cxsk_channel | `execute-this-plan.md` |
+| Execute one approved plan part on a mutate-capable cxsk_channel | `execute-this-plan-part.md` |
 
 ## Command model
 
 - `init` is collaboration bootstrap only. It is not mutation.
-- `chat` is discussion only. It is not approval and not mutation permission.
-- `review-my-plan` is a hard gate before any approved mutation step begins.
-- `review-my-work` is a hard gate before accepted delivery.
-- `work-sync` is a non-mutation sync turn.
-- `request-mutation` is the only mutation permission turn, and only for a cxsk_channel with `can_mutate: true`.
+- `sync` is coordination only. It is not approval and not mutation permission.
+- `review-this-plan` is a hard gate before execution begins.
+- `review-this-work` is a hard gate before accepted delivery.
+- `execute-this-plan` is the whole-plan execution turn for a mutate-capable cxsk_channel.
+- `execute-this-plan-part` is the plan-part execution turn for a mutate-capable cxsk_channel, and should be used only when the full plan is genuinely too large for one turn.
 
 ## Paths
 

@@ -34,15 +34,14 @@ REVIEW_WORK_FIELD = "work_for_review"
 REVIEW_WORK_NEW_INFO_FIELD = "new_information"
 REVIEW_WORK_FRESH_USER_FIELD = "fresh_user_message"
 REVIEW_WORK_APPROVED_FIELD = "approved_work"
-CHAT_MESSAGE_FIELD = "message_for_codex"
-CHAT_FRESH_USER_FIELD = "fresh_user_message"
-WORK_SYNC_MESSAGE_FIELD = "sync_message"
-WORK_SYNC_FRESH_USER_FIELD = "fresh_user_message"
-REQUEST_MUTATION_FIELD = "approved_mutation"
-REQUEST_MUTATION_FRESH_USER_FIELD = "fresh_user_message"
-REQUEST_MUTATION_SANDBOX_MODE_FIELD = "sandbox_mode"
-REQUEST_MUTATION_SANDBOX_DEFAULT = "default"
-REQUEST_MUTATION_SANDBOX_FULL_ACCESS = "full-access"
+SYNC_MESSAGE_FIELD = "sync_message"
+SYNC_FRESH_USER_FIELD = "fresh_user_message"
+EXECUTE_PLAN_FIELD = "approved_plan"
+EXECUTE_PLAN_PART_FIELD = "approved_plan_part"
+EXECUTE_FRESH_USER_FIELD = "fresh_user_message"
+EXECUTE_SANDBOX_MODE_FIELD = "sandbox_mode"
+EXECUTE_SANDBOX_DEFAULT = "default"
+EXECUTE_SANDBOX_FULL_ACCESS = "full-access"
 DANGEROUS_NEW_SESSION_PERMISSION_FIELD = "user_permission"
 DANGEROUS_NEW_SESSION_TARGET_FIELD = "target_session_id"
 DANGEROUS_NEW_SESSION_CXSK_CHANNEL_DESCRIPTION_FIELD = "cxsk_channel_description"
@@ -55,8 +54,8 @@ INIT_TASK_REPLY_TITLE = "Task Understanding Reply"
 INIT_RECOVERY_REPLY_TITLE = "Context Recovery Reply"
 REVIEW_PLAN_REPLY_TITLE = "Plan Review Reply"
 REVIEW_WORK_REPLY_TITLE = "Work Review Reply"
-WORK_SYNC_REPLY_TITLE = "Discussion Reply"
-WORK_SYNC_PLAN_TITLE = "Plan"
+SYNC_REPLY_TITLE = "Discussion Reply"
+SYNC_PLAN_TITLE = "Plan"
 SANDBOX_READ_ONLY = "read-only"
 SANDBOX_WORKSPACE_WRITE = "workspace-write"
 SANDBOX_DANGER_FULL_ACCESS = "danger-full-access"
@@ -71,6 +70,13 @@ MIGRATED_CXSK_CHANNEL_DESCRIPTION = "Migrated primary managed CXSK channel."
 CONFIG_VERSION = 5
 REF_DIRECTORY = f"{MANAGED_DIRNAME}/refs"
 REF_PATTERN = re.compile(r"\[\[REF:(?P<path>[^:\]]+?)(?:::(?P<locator>[^\]]+))?\]\]")
+LEGACY_STAGE_KEY_MAP = {
+    "chat": "sync",
+    "work-sync": "sync",
+    "review-my-plan": "review-this-plan",
+    "review-my-work": "review-this-work",
+    "request-mutation": "execute-this-plan",
+}
 
 LEGACY_STRUCTURED_FILENAMES = (
     "codex_agents.json",
@@ -80,11 +86,11 @@ LEGACY_STRUCTURED_FILENAMES = (
 
 TOOL_HELP = {
     "init": "Bootstrap Codex collaboration for a new task or recovery sync (reads JSON from stdin).",
-    "chat": "Discussion / disagreement resolution turn (reads JSON from stdin).",
-    "review-my-plan": "Codex reviews the cxsk_invoker's plan without mutating state (reads JSON from stdin).",
-    "review-my-work": "Codex reviews completed work without mutating state (reads JSON from stdin).",
-    "work-sync": "Codex sync turn for discussion, plan output, and review response (reads JSON from stdin).",
-    "request-mutation": "Codex performs one approved mutation step when this cxsk_channel is allowed to mutate (reads JSON from stdin).",
+    "sync": "Discussion / coordination / disagreement-resolution turn (reads JSON from stdin).",
+    "review-this-plan": "Codex reviews the submitted plan without mutating state (reads JSON from stdin).",
+    "review-this-work": "Codex reviews submitted work without mutating state (reads JSON from stdin).",
+    "execute-this-plan": "Codex executes one approved plan when this cxsk_channel is allowed to mutate (reads JSON from stdin).",
+    "execute-this-plan-part": "Codex executes one approved plan part when this cxsk_channel is allowed to mutate (reads JSON from stdin).",
     "dangerous-new-session": "Explicitly authorize discarding continuity and starting or switching a managed Codex cxsk_channel session (reads JSON from stdin).",
     "configure": "Patch cxsk_invoker guidance, shared guidance, or cxsk_channel metadata (reads JSON from stdin).",
     "update-config": "Normalize discoverable managed state and rewrite the canonical config (does not read JSON from stdin).",
@@ -259,6 +265,18 @@ def normalize_string_map(value: object, *, field_name: str) -> dict[str, str]:
     return result
 
 
+def normalize_stage_key(key: str) -> str:
+    return LEGACY_STAGE_KEY_MAP.get(key, key)
+
+
+def normalize_stage_guidance_map(value: object, *, field_name: str) -> dict[str, str]:
+    result = normalize_string_map(value, field_name=field_name)
+    normalized: dict[str, str] = {}
+    for key, stage_text in result.items():
+        normalized[normalize_stage_key(key)] = stage_text
+    return normalized
+
+
 def default_cxsk_channel_description(name: str) -> str:
     if name == DEFAULT_CXSK_CHANNEL_NAME:
         return DEFAULT_CXSK_CHANNEL_DESCRIPTION
@@ -320,7 +338,7 @@ def parse_cxsk_channel_config(obj: object) -> CxskChannelConfig:
         focus=normalize_optional_string(obj.get("focus")),
         baseline=normalize_optional_string(obj.get("baseline")),
         extra_context=normalize_optional_string(obj.get("extra_context")),
-        stage_guidance=normalize_string_map(obj.get("stage_guidance"), field_name=f"cxsk_channels[{name}].stage_guidance"),
+        stage_guidance=normalize_stage_guidance_map(obj.get("stage_guidance"), field_name=f"cxsk_channels[{name}].stage_guidance"),
         can_mutate=raw_can_mutate,
         session_id=normalize_optional_string(obj.get("session_id")),
         model=normalize_optional_string(obj.get("model")),
@@ -381,7 +399,7 @@ def parse_cxsk_invoker_config(obj: object) -> CxskInvokerConfig:
         baseline=normalize_optional_string(obj.get("baseline")),
         working_style=normalize_optional_string(obj.get("working_style")),
         extra_context=normalize_optional_string(obj.get("extra_context")),
-        stage_guidance=normalize_string_map(obj.get("stage_guidance"), field_name="cxsk_invoker.stage_guidance"),
+        stage_guidance=normalize_stage_guidance_map(obj.get("stage_guidance"), field_name="cxsk_invoker.stage_guidance"),
         can_mutate=raw_can_mutate,
     )
 
@@ -413,7 +431,7 @@ def parse_skill_config_object(obj: object, *, path: Path) -> CxskSkillConfig:
         seen.add(cxsk_channel.name)
         cxsk_channels.append(cxsk_channel)
     try:
-        shared_stages = normalize_string_map(obj.get("shared_stages"), field_name="shared_stages")
+        shared_stages = normalize_stage_guidance_map(obj.get("shared_stages"), field_name="shared_stages")
         cxsk_invoker_source = obj.get("cxsk_invoker", obj.get("invoker", obj.get("caller", obj.get("claude"))))
         cxsk_invoker = parse_cxsk_invoker_config(cxsk_invoker_source)
     except ValueError as exc:
@@ -742,34 +760,28 @@ class InitPayload:
 
 
 @dataclass(frozen=True)
-class ReviewMyPlanPayload:
+class ReviewThisPlanPayload:
     plan_for_review: str
     new_information: Optional[str]
     fresh_user_message: Optional[str]
 
 
 @dataclass(frozen=True)
-class ChatPayload:
-    message_for_codex: str
+class SyncPayload:
+    sync_message: str
     fresh_user_message: Optional[str]
 
 
 @dataclass(frozen=True)
-class ReviewMyWorkPayload:
+class ReviewThisWorkPayload:
     work_for_review: str
     new_information: Optional[str]
     fresh_user_message: Optional[str]
 
 
 @dataclass(frozen=True)
-class WorkSyncPayload:
-    sync_message: str
-    fresh_user_message: Optional[str]
-
-
-@dataclass(frozen=True)
-class RequestMutationPayload:
-    approved_mutation: str
+class ExecutePayload:
+    approved_scope: str
     fresh_user_message: Optional[str]
     sandbox_mode: str
 
@@ -839,18 +851,18 @@ def parse_init_payload(stdin_text: str) -> InitPayload:
     )
 
 
-def parse_review_my_plan_payload(stdin_text: str) -> ReviewMyPlanPayload:
+def parse_review_this_plan_payload(stdin_text: str) -> ReviewThisPlanPayload:
     text = stdin_text.replace("\r\n", "\n").replace("\r", "\n").strip()
     if not text:
-        raise ValueError("review-my-plan input is empty. Provide JSON with plan_for_review.")
+        raise ValueError("review-this-plan input is empty. Provide JSON with plan_for_review.")
 
     try:
         obj = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise ValueError(f"review-my-plan input must be valid JSON: {exc.msg}") from exc
+        raise ValueError(f"review-this-plan input must be valid JSON: {exc.msg}") from exc
 
     if not isinstance(obj, dict):
-        raise ValueError("review-my-plan input must be a JSON object.")
+        raise ValueError("review-this-plan input must be a JSON object.")
 
     allowed_keys = {
         REVIEW_PLAN_FIELD,
@@ -859,73 +871,73 @@ def parse_review_my_plan_payload(stdin_text: str) -> ReviewMyPlanPayload:
     }
     unknown_keys = set(obj.keys()) - allowed_keys
     if unknown_keys:
-        raise ValueError(f"review-my-plan input has unsupported fields: {', '.join(sorted(unknown_keys))}")
+        raise ValueError(f"review-this-plan input has unsupported fields: {', '.join(sorted(unknown_keys))}")
 
     plan_for_review = obj.get(REVIEW_PLAN_FIELD)
     if not isinstance(plan_for_review, str) or not plan_for_review.strip():
-        raise ValueError("review-my-plan requires a non-empty string field: plan_for_review.")
+        raise ValueError("review-this-plan requires a non-empty string field: plan_for_review.")
 
     def parse_optional_string(field: str) -> Optional[str]:
         value = obj.get(field)
         if value is None:
             return None
         if not isinstance(value, str) or not value.strip():
-            raise ValueError(f"review-my-plan field {field} must be a non-empty string when provided.")
+            raise ValueError(f"review-this-plan field {field} must be a non-empty string when provided.")
         return value.strip()
 
-    return ReviewMyPlanPayload(
+    return ReviewThisPlanPayload(
         plan_for_review=plan_for_review.strip(),
         new_information=parse_optional_string(REVIEW_PLAN_NEW_INFO_FIELD),
         fresh_user_message=parse_optional_string(REVIEW_PLAN_FRESH_USER_FIELD),
     )
 
 
-def parse_chat_payload(stdin_text: str) -> ChatPayload:
+def parse_sync_payload(stdin_text: str) -> SyncPayload:
     text = stdin_text.replace("\r\n", "\n").replace("\r", "\n").strip()
     if not text:
-        raise ValueError("chat input is empty. Provide JSON with message_for_codex.")
+        raise ValueError("sync input is empty. Provide JSON with sync_message.")
 
     try:
         obj = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise ValueError(f"chat input must be valid JSON: {exc.msg}") from exc
+        raise ValueError(f"sync input must be valid JSON: {exc.msg}") from exc
 
     if not isinstance(obj, dict):
-        raise ValueError("chat input must be a JSON object.")
+        raise ValueError("sync input must be a JSON object.")
 
-    allowed_keys = {CHAT_MESSAGE_FIELD, CHAT_FRESH_USER_FIELD}
+    allowed_keys = {SYNC_MESSAGE_FIELD, SYNC_FRESH_USER_FIELD}
     unknown_keys = set(obj.keys()) - allowed_keys
     if unknown_keys:
-        raise ValueError(f"chat input has unsupported fields: {', '.join(sorted(unknown_keys))}")
+        raise ValueError(f"sync input has unsupported fields: {', '.join(sorted(unknown_keys))}")
 
-    message = obj.get(CHAT_MESSAGE_FIELD)
-    if not isinstance(message, str) or not message.strip():
-        raise ValueError("chat requires a non-empty string field: message_for_codex.")
+    sync_message = obj.get(SYNC_MESSAGE_FIELD)
+    if not isinstance(sync_message, str) or not sync_message.strip():
+        raise ValueError("sync requires a non-empty string field: sync_message.")
 
-    fresh_user_message = obj.get(CHAT_FRESH_USER_FIELD)
+    fresh_user_message = obj.get(SYNC_FRESH_USER_FIELD)
     if fresh_user_message is not None:
         if not isinstance(fresh_user_message, str) or not fresh_user_message.strip():
-            raise ValueError("chat field fresh_user_message must be a non-empty string when provided.")
+            raise ValueError("sync field fresh_user_message must be a non-empty string when provided.")
         fresh_user_message = fresh_user_message.strip()
 
-    return ChatPayload(
-        message_for_codex=message.strip(),
+    return SyncPayload(
+        sync_message=sync_message.strip(),
         fresh_user_message=fresh_user_message,
     )
 
 
-def parse_review_my_work_payload(stdin_text: str) -> ReviewMyWorkPayload:
+def parse_review_this_work_payload(stdin_text: str) -> ReviewThisWorkPayload:
     text = stdin_text.replace("\r\n", "\n").replace("\r", "\n").strip()
     if not text:
-        raise ValueError("review-my-work input is empty. Provide JSON with work_for_review.")
+        raise ValueError("review-this-work input is empty. Provide JSON with work_for_review.")
 
     try:
         obj = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise ValueError(f"review-my-work input must be valid JSON: {exc.msg}") from exc
+        raise ValueError(f"review-this-work input must be valid JSON: {exc.msg}") from exc
 
     if not isinstance(obj, dict):
-        raise ValueError("review-my-work input must be a JSON object.")
+        raise ValueError("review-this-work input must be a JSON object.")
 
     allowed_keys = {
         REVIEW_WORK_FIELD,
@@ -934,99 +946,67 @@ def parse_review_my_work_payload(stdin_text: str) -> ReviewMyWorkPayload:
     }
     unknown_keys = set(obj.keys()) - allowed_keys
     if unknown_keys:
-        raise ValueError(f"review-my-work input has unsupported fields: {', '.join(sorted(unknown_keys))}")
+        raise ValueError(f"review-this-work input has unsupported fields: {', '.join(sorted(unknown_keys))}")
 
     work_for_review = obj.get(REVIEW_WORK_FIELD)
     if not isinstance(work_for_review, str) or not work_for_review.strip():
-        raise ValueError("review-my-work requires a non-empty string field: work_for_review.")
+        raise ValueError("review-this-work requires a non-empty string field: work_for_review.")
 
     def parse_optional_string(field: str) -> Optional[str]:
         value = obj.get(field)
         if value is None:
             return None
         if not isinstance(value, str) or not value.strip():
-            raise ValueError(f"review-my-work field {field} must be a non-empty string when provided.")
+            raise ValueError(f"review-this-work field {field} must be a non-empty string when provided.")
         return value.strip()
 
-    return ReviewMyWorkPayload(
+    return ReviewThisWorkPayload(
         work_for_review=work_for_review.strip(),
         new_information=parse_optional_string(REVIEW_WORK_NEW_INFO_FIELD),
         fresh_user_message=parse_optional_string(REVIEW_WORK_FRESH_USER_FIELD),
     )
 
 
-def parse_work_sync_payload(stdin_text: str) -> WorkSyncPayload:
+def parse_execute_payload(stdin_text: str, *, mode: str) -> ExecutePayload:
     text = stdin_text.replace("\r\n", "\n").replace("\r", "\n").strip()
     if not text:
-        raise ValueError("work-sync input is empty. Provide JSON with sync_message.")
+        raise ValueError(f"{mode} input is empty. Provide JSON with the approved plan scope.")
 
     try:
         obj = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise ValueError(f"work-sync input must be valid JSON: {exc.msg}") from exc
+        raise ValueError(f"{mode} input must be valid JSON: {exc.msg}") from exc
 
     if not isinstance(obj, dict):
-        raise ValueError("work-sync input must be a JSON object.")
+        raise ValueError(f"{mode} input must be a JSON object.")
 
-    allowed_keys = {WORK_SYNC_MESSAGE_FIELD, WORK_SYNC_FRESH_USER_FIELD}
-    unknown_keys = set(obj.keys()) - allowed_keys
-    if unknown_keys:
-        raise ValueError(f"work-sync input has unsupported fields: {', '.join(sorted(unknown_keys))}")
-
-    sync_message = obj.get(WORK_SYNC_MESSAGE_FIELD)
-    if not isinstance(sync_message, str) or not sync_message.strip():
-        raise ValueError("work-sync requires a non-empty string field: sync_message.")
-
-    fresh_user_message = obj.get(WORK_SYNC_FRESH_USER_FIELD)
-    if fresh_user_message is not None:
-        if not isinstance(fresh_user_message, str) or not fresh_user_message.strip():
-            raise ValueError("work-sync field fresh_user_message must be a non-empty string when provided.")
-        fresh_user_message = fresh_user_message.strip()
-
-    return WorkSyncPayload(
-        sync_message=sync_message.strip(),
-        fresh_user_message=fresh_user_message,
-    )
-
-
-def parse_request_mutation_payload(stdin_text: str) -> RequestMutationPayload:
-    text = stdin_text.replace("\r\n", "\n").replace("\r", "\n").strip()
-    if not text:
-        raise ValueError("request-mutation input is empty. Provide JSON with approved_mutation.")
-
-    try:
-        obj = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"request-mutation input must be valid JSON: {exc.msg}") from exc
-
-    if not isinstance(obj, dict):
-        raise ValueError("request-mutation input must be a JSON object.")
+    approved_field = EXECUTE_PLAN_FIELD if mode == "execute-this-plan" else EXECUTE_PLAN_PART_FIELD
 
     allowed_keys = {
-        REQUEST_MUTATION_FIELD,
-        REQUEST_MUTATION_FRESH_USER_FIELD,
-        REQUEST_MUTATION_SANDBOX_MODE_FIELD,
+        approved_field,
+        EXECUTE_FRESH_USER_FIELD,
+        EXECUTE_SANDBOX_MODE_FIELD,
     }
     unknown_keys = set(obj.keys()) - allowed_keys
     if unknown_keys:
-        raise ValueError(f"request-mutation input has unsupported fields: {', '.join(sorted(unknown_keys))}")
+        raise ValueError(f"{mode} input has unsupported fields: {', '.join(sorted(unknown_keys))}")
 
-    approved_mutation = obj.get(REQUEST_MUTATION_FIELD)
-    if not isinstance(approved_mutation, str) or not approved_mutation.strip():
-        raise ValueError("request-mutation requires a non-empty string field: approved_mutation.")
+    approved_scope = obj.get(approved_field)
+    if not isinstance(approved_scope, str) or not approved_scope.strip():
+        raise ValueError(f"{mode} requires a non-empty string field: {approved_field}.")
 
-    fresh_user_message = obj.get(REQUEST_MUTATION_FRESH_USER_FIELD)
+    fresh_user_message = obj.get(EXECUTE_FRESH_USER_FIELD)
     if fresh_user_message is not None:
         if not isinstance(fresh_user_message, str) or not fresh_user_message.strip():
-            raise ValueError("request-mutation field fresh_user_message must be a non-empty string when provided.")
+            raise ValueError(f"{mode} field fresh_user_message must be a non-empty string when provided.")
         fresh_user_message = fresh_user_message.strip()
 
-    sandbox_mode = obj.get(REQUEST_MUTATION_SANDBOX_MODE_FIELD, REQUEST_MUTATION_SANDBOX_DEFAULT)
-    if sandbox_mode not in {REQUEST_MUTATION_SANDBOX_DEFAULT, REQUEST_MUTATION_SANDBOX_FULL_ACCESS}:
-        raise ValueError("request-mutation field sandbox_mode must be exactly 'default' or 'full-access' when provided.")
+    sandbox_mode = obj.get(EXECUTE_SANDBOX_MODE_FIELD, EXECUTE_SANDBOX_DEFAULT)
+    if sandbox_mode not in {EXECUTE_SANDBOX_DEFAULT, EXECUTE_SANDBOX_FULL_ACCESS}:
+        raise ValueError(f"{mode} field sandbox_mode must be exactly 'default' or 'full-access' when provided.")
 
-    return RequestMutationPayload(
-        approved_mutation=approved_mutation.strip(),
+    return ExecutePayload(
+        approved_scope=approved_scope.strip(),
         fresh_user_message=fresh_user_message,
         sandbox_mode=sandbox_mode,
     )
@@ -1318,30 +1298,30 @@ def build_codex_skill_reminder_text_for_codex(
         return prompt_text.strip()
 
     brief_map = {
-        "chat": (
+        "sync": (
             "Persistent collaboration turn with the cxsk_invoker, not the end user. "
-            "Discussion only; no mutation and no gate verdict. "
+            "Sync only; discussion, coordination, disagreement handling, and review relay are allowed, but mutation is not. "
+            "Return ## Discussion Reply, and add ## Plan only when a candidate plan is genuinely ready. "
             "Compare evidence, surface disagreement clearly, and only ask the cxsk_invoker to escalate to the user "
             "if a real unresolved disagreement between you and the cxsk_invoker has persisted for about 10 turns."
         ),
-        "review-my-plan": (
+        "review-this-plan": (
             "Hard gate. Review the plan before any mutation, do not mutate in this turn, and judge from facts and whole-system coherence. "
             "The first non-empty line must be approved_to_mutate: true or approved_to_mutate: false, followed by ## Plan Review Reply. "
             "Do not ask for user input unless a real unresolved disagreement between you and the cxsk_invoker has persisted for about 10 turns."
         ),
-        "review-my-work": (
+        "review-this-work": (
             "Hard gate. Review the actual work, not intent; do not mutate in this turn. "
             "The first non-empty line must be approved_work: true or approved_work: false, followed by ## Work Review Reply. "
             "Do not ask for user input unless a real unresolved disagreement between you and the cxsk_invoker has persisted for about 10 turns."
         ),
-        "work-sync": (
-            "Sync turn only. Discussion, disagreement handling, candidate plan formation, or response to cxsk_invoker review are allowed; mutation is not. "
-            "Return ## Discussion Reply, and add ## Plan only when a candidate plan is genuinely ready. "
-            "Do not ask for user input unless a real unresolved disagreement between you and the cxsk_invoker has persisted for about 10 turns."
+        "execute-this-plan": (
+            "Execution turn for a mutate-capable cxsk_channel. Execute the approved plan as a substantial unit, do not stop for trivial progress, and only stop when the approved plan is complete or a real blocker prevents safe continuation. "
+            "Do not widen scope and do not ask the user directly."
         ),
-        "request-mutation": (
-            "Mutation turn for a mutate-capable cxsk_channel. Perform only the approved step, do not widen scope, then stop and report what changed, what you verified, what concerns remain, and where you stopped. "
-            "Do not ask the user directly."
+        "execute-this-plan-part": (
+            "Execution turn for a mutate-capable cxsk_channel. Use a plan part only when the full plan is genuinely too large; a plan part must still be a substantial coherent chunk, not a trivial fragment. "
+            "Do not stop for incidental small edits. Stop only when the approved plan part is complete or a real blocker prevents safe continuation."
         ),
     }
     return brief_map.get(tool, prompt_text.strip())
@@ -1353,25 +1333,25 @@ def build_codex_skill_reminder_text_for_invoker(tool: str, *, full: bool) -> str
             "Run init on every new shared task and after compact/context clear when you need to re-bootstrap shared context. "
             "Init is collaboration bootstrap only. It is not discussion and not mutation."
         ),
-        "chat": (
-            "This is discussion only. Do not treat chat as plan approval or mutation permission. "
+        "sync": (
+            "This is the general sync turn. Use it for discussion, coordination, disagreement handling, plan repair, and relaying review outcomes. "
             "Keep pushing for real consensus, and do not stop for user input unless a real unresolved cxsk_invoker/Codex disagreement has persisted for about 10 turns."
         ),
-        "review-my-plan": (
-            "This is the hard gate before any approved mutation step begins. Submit a concrete plan, require direct fact-checking, and do not treat mere discussion as approval. "
+        "review-this-plan": (
+            "This is the hard gate before execution begins. Submit a concrete plan, require direct fact-checking, and do not treat mere discussion as approval. "
             "Do not ask the user just because execution feels uncertain; escalate only when a real unresolved cxsk_invoker/Codex disagreement has persisted for about 10 turns."
         ),
-        "review-my-work": (
+        "review-this-work": (
             "This is the hard gate before delivery. Review actual work, evidence, and coherence. "
-            "approved_work: true accepts only the reviewed step, not automatically the whole larger plan; if more agreed steps remain, continue directly to the next step instead of stopping. "
+            "approved_work: true accepts only the reviewed execution scope, not automatically the whole larger plan; if more agreed scopes remain, continue directly instead of stopping. "
             "Do not ask the user just because next execution steps are undecided; escalate only when a real unresolved cxsk_invoker/Codex disagreement has persisted for about 10 turns."
         ),
-        "work-sync": (
-            "This is the non-mutation sync turn. Use it for discussion, disagreement, candidate plans, and response to review. "
-            "It is not mutation permission. Escalate to the user only for a real unresolved cxsk_invoker/Codex disagreement that has persisted for about 10 turns."
+        "execute-this-plan": (
+            "This is the execution turn for a whole approved plan. Do not fragment execution into trivial pieces. Finish the approved plan unless a real blocker or invalidated premise forces a stop. "
+            "Escalate to the user only for a real unresolved cxsk_invoker/Codex disagreement that has persisted for about 10 turns."
         ),
-        "request-mutation": (
-            "This is the mutation permission turn for the selected mutate-capable cxsk_channel. Approve exactly one concrete step, then expect Codex to stop and report back. "
+        "execute-this-plan-part": (
+            "This is the execution turn for one approved plan part. Use a plan part only when the full plan is genuinely too large, and require the approved part to be a substantial coherent chunk rather than a tiny fragment. "
             "Do not ask the user about whether to continue execution unless a real unresolved cxsk_invoker/Codex disagreement has persisted for about 10 turns."
         ),
         "configure": (
@@ -1386,11 +1366,11 @@ def build_codex_skill_reminder_text_for_invoker(tool: str, *, full: bool) -> str
     }
     brief_map = {
         "init": "Init re-establishes the collaboration baseline. Use full reminders here.",
-        "chat": "Discussion only. No approval. Full Codex Skill reminder still applies. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
-        "review-my-plan": "Hard gate before mutation. Full Codex Skill reminder still applies. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
-        "review-my-work": "Hard gate before delivery. approved_work: true accepts only the reviewed step; if more agreed steps remain, continue instead of stopping. Full Codex Skill reminder still applies. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
-        "work-sync": "Sync only. No mutation permission. Full Codex Skill reminder still applies. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
-        "request-mutation": "Single approved mutation step on a mutate-capable cxsk_channel only. Full Codex Skill reminder still applies.",
+        "sync": "General sync only. No mutation permission. Full Codex Skill reminder still applies. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
+        "review-this-plan": "Hard gate before execution. Full Codex Skill reminder still applies. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
+        "review-this-work": "Hard gate before accepted delivery. approved_work: true accepts only the reviewed execution scope; continue if more agreed scopes remain. Full Codex Skill reminder still applies. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
+        "execute-this-plan": "Execute the approved plan as a substantial whole. Do not stop for trivial progress. Full Codex Skill reminder still applies.",
+        "execute-this-plan-part": "Execute only the approved plan part, and only use plan-part mode for genuinely large plans. The approved part must still be substantial. Full Codex Skill reminder still applies.",
         "configure": "CXSK invoker-supplied config patch only. Full Codex Skill reminder still applies.",
         "update-config": "Config update only. Full Codex Skill reminder still applies.",
         "dangerous-new-session": "Destructive continuity replacement. Full Codex Skill reminder still applies.",
@@ -1401,7 +1381,7 @@ def build_codex_skill_reminder_text_for_invoker(tool: str, *, full: bool) -> str
 def collaborative_turn_index(tool: str, cxsk_channel: CxskChannelConfig) -> int:
     if tool == "init":
         return 0
-    if tool in {"chat", "review-my-plan", "review-my-work", "work-sync", "request-mutation"}:
+    if tool in {"sync", "review-this-plan", "review-this-work", "execute-this-plan", "execute-this-plan-part"}:
         return cxsk_channel.reminder_turn_count + 1
     return 0
 
@@ -1619,7 +1599,7 @@ def build_init_prompt(
     return prompt, payload.mode
 
 
-def build_review_my_plan_prompt(
+def build_review_this_plan_prompt(
     repo_root: Path,
     config: CxskSkillConfig,
     cxsk_channel: CxskChannelConfig,
@@ -1627,9 +1607,9 @@ def build_review_my_plan_prompt(
     *,
     full_reminder: bool,
 ) -> str:
-    payload = parse_review_my_plan_payload(stdin_text)
+    payload = parse_review_this_plan_payload(stdin_text)
     parts = [
-        load_prompt_asset("review-my-plan.md"),
+        load_prompt_asset("review-this-plan.md"),
         "Plan for review from the cxsk_invoker:",
         payload.plan_for_review,
     ]
@@ -1656,13 +1636,13 @@ def build_review_my_plan_prompt(
         repo_root,
         config,
         cxsk_channel,
-        tool="review-my-plan",
+        tool="review-this-plan",
         full_reminder=full_reminder,
         base_parts=parts,
     )
 
 
-def build_chat_prompt(
+def build_sync_prompt(
     repo_root: Path,
     config: CxskSkillConfig,
     cxsk_channel: CxskChannelConfig,
@@ -1670,11 +1650,11 @@ def build_chat_prompt(
     *,
     full_reminder: bool,
 ) -> str:
-    payload = parse_chat_payload(stdin_text)
+    payload = parse_sync_payload(stdin_text)
     parts = [
-        load_prompt_asset("chat.md"),
-        "Message from the cxsk_invoker:",
-        payload.message_for_codex,
+        load_prompt_asset("sync.md"),
+        "Sync message from the cxsk_invoker:",
+        payload.sync_message,
     ]
 
     if payload.fresh_user_message:
@@ -1691,13 +1671,13 @@ def build_chat_prompt(
         repo_root,
         config,
         cxsk_channel,
-        tool="chat",
+        tool="sync",
         full_reminder=full_reminder,
         base_parts=parts,
     )
 
 
-def build_review_my_work_prompt(
+def build_review_this_work_prompt(
     repo_root: Path,
     config: CxskSkillConfig,
     cxsk_channel: CxskChannelConfig,
@@ -1705,9 +1685,9 @@ def build_review_my_work_prompt(
     *,
     full_reminder: bool,
 ) -> str:
-    payload = parse_review_my_work_payload(stdin_text)
+    payload = parse_review_this_work_payload(stdin_text)
     parts = [
-        load_prompt_asset("review-my-work.md"),
+        load_prompt_asset("review-this-work.md"),
         "Work for review from the cxsk_invoker:",
         payload.work_for_review,
     ]
@@ -1734,25 +1714,35 @@ def build_review_my_work_prompt(
         repo_root,
         config,
         cxsk_channel,
-        tool="review-my-work",
+        tool="review-this-work",
         full_reminder=full_reminder,
         base_parts=parts,
     )
 
 
-def build_work_sync_prompt(
+def build_execute_prompt(
     repo_root: Path,
     config: CxskSkillConfig,
     cxsk_channel: CxskChannelConfig,
     stdin_text: str,
     *,
     full_reminder: bool,
+    mode: str,
 ) -> str:
-    payload = parse_work_sync_payload(stdin_text)
+    payload = parse_execute_payload(stdin_text, mode=mode)
     parts = [
-        load_prompt_asset("work-sync.md"),
-        "Sync message from the cxsk_invoker:",
-        payload.sync_message,
+        load_prompt_asset("execute-this-plan.md" if mode == "execute-this-plan" else "execute-this-plan-part.md"),
+        (
+            "Execution sandbox for this turn: workspace-write (default mutation sandbox)."
+            if payload.sandbox_mode == EXECUTE_SANDBOX_DEFAULT
+            else "Execution sandbox for this turn: danger-full-access (explicit full-access escalation approved by the cxsk_invoker)."
+        ),
+        (
+            "Approved plan from the cxsk_invoker:"
+            if mode == "execute-this-plan"
+            else "Approved plan part from the cxsk_invoker:"
+        ),
+        payload.approved_scope,
     ]
 
     if payload.fresh_user_message:
@@ -1769,57 +1759,16 @@ def build_work_sync_prompt(
         repo_root,
         config,
         cxsk_channel,
-        tool="work-sync",
-        full_reminder=full_reminder,
-        base_parts=parts,
-    )
-
-
-def build_request_mutation_prompt(
-    repo_root: Path,
-    config: CxskSkillConfig,
-    cxsk_channel: CxskChannelConfig,
-    stdin_text: str,
-    *,
-    full_reminder: bool,
-) -> str:
-    payload = parse_request_mutation_payload(stdin_text)
-    sandbox_note = (
-        "Execution sandbox for this turn: workspace-write (default mutation sandbox)."
-        if payload.sandbox_mode == REQUEST_MUTATION_SANDBOX_DEFAULT
-        else "Execution sandbox for this turn: danger-full-access (explicit full-access escalation approved by the cxsk_invoker)."
-    )
-    parts = [
-        load_prompt_asset("request-mutation.md"),
-        sandbox_note,
-        "Approved mutation from the cxsk_invoker:",
-        payload.approved_mutation,
-    ]
-
-    if payload.fresh_user_message:
-        parts.extend(
-            [
-                "Fresh user message from the user (verbatim):",
-                VERBATIM_BEGIN,
-                payload.fresh_user_message,
-                VERBATIM_END,
-            ]
-        )
-
-    return compose_prompt(
-        repo_root,
-        config,
-        cxsk_channel,
-        tool="request-mutation",
+        tool=mode,
         full_reminder=full_reminder,
         base_parts=parts,
     )
 
 
 def resolve_codex_exec_sandbox(cmd: str, stdin_text: str) -> str:
-    if cmd == "request-mutation":
-        payload = parse_request_mutation_payload(stdin_text)
-        if payload.sandbox_mode == REQUEST_MUTATION_SANDBOX_FULL_ACCESS:
+    if cmd in {"execute-this-plan", "execute-this-plan-part"}:
+        payload = parse_execute_payload(stdin_text, mode=cmd)
+        if payload.sandbox_mode == EXECUTE_SANDBOX_FULL_ACCESS:
             return SANDBOX_DANGER_FULL_ACCESS
         return SANDBOX_WORKSPACE_WRITE
     return SANDBOX_READ_ONLY
@@ -1879,21 +1828,21 @@ def validate_init_reply(mode: str, reply: str) -> str:
     return require_markdown_section(reply, expected_title)
 
 
-def validate_review_my_plan_reply(reply: str) -> str:
+def validate_review_this_plan_reply(reply: str) -> str:
     parse_required_boolean_line(reply, REVIEW_PLAN_APPROVED_FIELD)
     return require_markdown_section(reply, REVIEW_PLAN_REPLY_TITLE)
 
 
-def validate_review_my_work_reply(reply: str) -> str:
+def validate_review_this_work_reply(reply: str) -> str:
     parse_required_boolean_line(reply, REVIEW_WORK_APPROVED_FIELD)
     return require_markdown_section(reply, REVIEW_WORK_REPLY_TITLE)
 
 
-def validate_work_sync_reply(reply: str) -> str:
-    normalized = require_markdown_section(reply, WORK_SYNC_REPLY_TITLE, stop_titles=[WORK_SYNC_PLAN_TITLE])
-    plan_heading = find_markdown_heading(normalized, WORK_SYNC_PLAN_TITLE)
+def validate_sync_reply(reply: str) -> str:
+    normalized = require_markdown_section(reply, SYNC_REPLY_TITLE, stop_titles=[SYNC_PLAN_TITLE])
+    plan_heading = find_markdown_heading(normalized, SYNC_PLAN_TITLE)
     if plan_heading is not None:
-        require_markdown_section(normalized, WORK_SYNC_PLAN_TITLE)
+        require_markdown_section(normalized, SYNC_PLAN_TITLE)
     return normalized
 
 
@@ -1909,39 +1858,32 @@ def build_prompt(
     if tool == "init":
         prompt, _mode = build_init_prompt(repo_root, config, cxsk_channel, stdin_text)
         return prompt
-    if tool == "chat":
-        return build_chat_prompt(repo_root, config, cxsk_channel, stdin_text, full_reminder=full_reminder)
-    if tool == "review-my-plan":
-        return build_review_my_plan_prompt(
+    if tool == "sync":
+        return build_sync_prompt(repo_root, config, cxsk_channel, stdin_text, full_reminder=full_reminder)
+    if tool == "review-this-plan":
+        return build_review_this_plan_prompt(
             repo_root,
             config,
             cxsk_channel,
             stdin_text,
             full_reminder=full_reminder,
         )
-    if tool == "review-my-work":
-        return build_review_my_work_prompt(
+    if tool == "review-this-work":
+        return build_review_this_work_prompt(
             repo_root,
             config,
             cxsk_channel,
             stdin_text,
             full_reminder=full_reminder,
         )
-    if tool == "work-sync":
-        return build_work_sync_prompt(
+    if tool in {"execute-this-plan", "execute-this-plan-part"}:
+        return build_execute_prompt(
             repo_root,
             config,
             cxsk_channel,
             stdin_text,
             full_reminder=full_reminder,
-        )
-    if tool == "request-mutation":
-        return build_request_mutation_prompt(
-            repo_root,
-            config,
-            cxsk_channel,
-            stdin_text,
-            full_reminder=full_reminder,
+            mode=tool,
         )
     raise ValueError(f"Unsupported tool: {tool}")
 
@@ -2518,12 +2460,12 @@ def main() -> int:
     turn_index = collaborative_turn_index(args.cmd, cxsk_channel)
     full_reminder = should_use_full_reminder(args.cmd, turn_index)
 
-    if args.cmd == "request-mutation" and not cxsk_channel.can_mutate:
+    if args.cmd in {"execute-this-plan", "execute-this-plan-part"} and not cxsk_channel.can_mutate:
         eprint(
             "\n".join(
                 [
                     f"CXSK channel '{cxsk_channel.name}' is configured with can_mutate: false.",
-                    "request-mutation is only allowed for a mutate-capable cxsk_channel.",
+                    "execute-this-plan and execute-this-plan-part are only allowed for a mutate-capable cxsk_channel.",
                     "Choose a different cxsk_channel or update the cxsk_channel config through configure.",
                 ]
             )
@@ -2579,7 +2521,7 @@ def main() -> int:
             0
             if args.cmd == "init"
             else cxsk_channel.reminder_turn_count + 1
-            if args.cmd in {"chat", "review-my-plan", "review-my-work", "work-sync", "request-mutation"}
+            if args.cmd in {"sync", "review-this-plan", "review-this-work", "execute-this-plan", "execute-this-plan-part"}
             else cxsk_channel.reminder_turn_count
         ),
         updated_at=iso_now(),
@@ -2593,21 +2535,21 @@ def main() -> int:
         except Exception as exc:
             eprint(str(exc))
             return 1
-    elif args.cmd == "review-my-plan":
+    elif args.cmd == "review-this-plan":
         try:
-            result.reply = validate_review_my_plan_reply(result.reply)
+            result.reply = validate_review_this_plan_reply(result.reply)
         except Exception as exc:
             eprint(str(exc))
             return 1
-    elif args.cmd == "review-my-work":
+    elif args.cmd == "review-this-work":
         try:
-            result.reply = validate_review_my_work_reply(result.reply)
+            result.reply = validate_review_this_work_reply(result.reply)
         except Exception as exc:
             eprint(str(exc))
             return 1
-    elif args.cmd == "work-sync":
+    elif args.cmd == "sync":
         try:
-            result.reply = validate_work_sync_reply(result.reply)
+            result.reply = validate_sync_reply(result.reply)
         except Exception as exc:
             eprint(str(exc))
             return 1

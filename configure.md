@@ -15,7 +15,7 @@ Cxsk Channel patches are applied by `name`. If the named cxsk_channel does not e
 Important fields:
 
 - `cxsk_invoker.can_mutate`: reminder-only
-- `cxsk_channels[].can_mutate`: enforced by `request-mutation`
+- `cxsk_channels[].can_mutate`: enforced by `execute-this-plan` and `execute-this-plan-part`
 
 ## Input contract
 
@@ -26,12 +26,12 @@ Important fields:
     "working_style": "Optional. Non-empty string or null.",
     "extra_context": "Optional. Non-empty string or null.",
     "stage_guidance": {
-      "review-my-plan": "Optional. Non-empty string or null."
+      "review-this-plan": "Optional. Non-empty string or null."
     },
     "can_mutate": false
   },
   "shared_stages": {
-    "chat": "Optional. Non-empty string or null."
+    "sync": "Optional. Non-empty string or null."
   },
   "cxsk_channels": [
     {
@@ -41,7 +41,7 @@ Important fields:
       "baseline": "Optional. Non-empty string or null.",
       "extra_context": "Optional. Non-empty string or null.",
       "stage_guidance": {
-        "review-my-plan": "Optional. Non-empty string or null."
+        "review-this-plan": "Optional. Non-empty string or null."
       },
       "can_mutate": false,
       "model": "Optional. Non-empty string or null.",

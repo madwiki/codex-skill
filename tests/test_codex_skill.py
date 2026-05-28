@@ -240,7 +240,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
 
     def test_existing_agent_session_is_resumed_by_default(self) -> None:
         proc, capture, _state = self.run_skill(
-            "review-my-plan",
+            "review-this-plan",
             '{"plan_for_review":"Change only the prompt parser and update tests."}',
             "approved_to_mutate: true\n\n## Plan Review Reply\n\nBoundary is acceptable.",
             initial_cxsk_channels=[self.build_cxsk_channel("default", session_id="resume-me")],
@@ -267,7 +267,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
 
     def test_legacy_single_session_is_migrated_once_before_resume(self) -> None:
         proc, capture, state = self.run_skill(
-            "review-my-plan",
+            "review-this-plan",
             '{"plan_for_review":"Review the current plan."}',
             "approved_to_mutate: true\n\n## Plan Review Reply\n\nLegacy migration looks fine.",
             legacy_session_id="legacy-session",
@@ -312,7 +312,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
             ],
         }
         proc, capture, state = self.run_skill(
-            "review-my-plan",
+            "review-this-plan",
             '{"plan_for_review":"Review the current plan."}',
             "approved_to_mutate: true\n\n## Plan Review Reply\n\nLooks acceptable.",
             initial_legacy_config=legacy_config,
@@ -330,6 +330,8 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         self.assertIn("cxsk_invoker", payload)
         self.assertNotIn("claude", payload)
         self.assertEqual(payload["cxsk_invoker"]["baseline"], "Keep the original task stable.")
+        self.assertEqual(payload["cxsk_invoker"]["stage_guidance"]["review-this-plan"], "Require concrete scope.")
+        self.assertEqual(payload["shared_stages"]["sync"], "Discussion only.")
         self.assertTrue(payload["cxsk_invoker"]["can_mutate"])
         self.assertNotIn("work_modes", payload)
 
@@ -367,10 +369,10 @@ class CodexSkillIntegrationTests(unittest.TestCase):
             json.dumps(
                 {
                     "cxsk_invoker": {
-                        "baseline": "Keep original requirements stable.",
+                    "baseline": "Keep original requirements stable.",
                     "working_style": "Discuss before mutating.",
                     "stage_guidance": {
-                        "review-my-plan": "Challenge weak evidence first."
+                        "review-this-plan": "Challenge weak evidence first."
                     },
                     "can_mutate": False,
                 },
@@ -383,7 +385,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
                             "focus": "Watch for architectural drift.",
                             "baseline": "Do not let local convenience override the original task.",
                             "stage_guidance": {
-                                "review-my-plan": "Push back on scope creep."
+                                "review-this-plan": "Push back on scope creep."
                             },
                             "can_mutate": False,
                             "model": "gpt-review",
@@ -422,7 +424,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
 
     def test_prompt_includes_config_sections_and_ref_notice(self) -> None:
         proc, capture, _state = self.run_skill(
-            "review-my-plan",
+            "review-this-plan",
             '{"plan_for_review":"Review the plan against [[REF:.codex-skill/refs/rules.md::Rule 5]]."}',
             "approved_to_mutate: true\n\n## Plan Review Reply\n\nLooks acceptable.",
             initial_cxsk_channels=[
@@ -431,7 +433,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
                     session_id="existing-session",
                     focus="Watch for drift against [[REF:.codex-skill/refs/rules.md::Rule 5]].",
                     baseline="Keep the original requirements stable.",
-                    stage_guidance={"review-my-plan": "Use [[REF:.codex-skill/refs/rules.md::Rule 10]]."},
+                    stage_guidance={"review-this-plan": "Use [[REF:.codex-skill/refs/rules.md::Rule 10]]."},
                 )
             ],
             ref_files={
@@ -462,16 +464,16 @@ class CodexSkillIntegrationTests(unittest.TestCase):
                 "working_style": "Use Codex Skill, not raw Codex.",
                 "extra_context": None,
                 "stage_guidance": {
-                    "review-my-plan": "Before mutation, insist on a concrete plan."
+                    "review-this-plan": "Before execution, insist on a concrete plan."
                 },
                 "can_mutate": False,
             },
             shared_stages={
-                "review-my-plan": "This is a shared hard-gate stage."
+                "review-this-plan": "This is a shared hard-gate stage."
             },
         )
         proc, capture, _state = self.run_skill(
-            "review-my-plan",
+            "review-this-plan",
             '{"plan_for_review":"Review the concrete plan."}',
             "approved_to_mutate: true\n\n## Plan Review Reply\n\nLooks acceptable.",
             initial_config=initial_config,
@@ -511,9 +513,9 @@ class CodexSkillIntegrationTests(unittest.TestCase):
             },
         )
         proc, capture, state = self.run_skill(
-            "chat",
-            '{"message_for_codex":"Continue the discussion."}',
-            "Normal discussion reply.",
+            "sync",
+            '{"sync_message":"Continue the discussion."}',
+            "## Discussion Reply\n\nNormal discussion reply.",
             initial_config=initial_config,
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -528,20 +530,20 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         cxsk_channel = self.find_cxsk_channel(state, "default")
         self.assertEqual(cxsk_channel["reminder_turn_count"], 2)
 
-    def test_review_my_work_reminder_warns_not_to_stop_after_step_pass(self) -> None:
+    def test_review_this_work_reminder_warns_not_to_stop_after_scope_pass(self) -> None:
         proc, _capture, _state = self.run_skill(
-            "review-my-work",
+            "review-this-work",
             '{"work_for_review":"Changed one agreed sub-step and verified the relevant tests."}',
             "approved_work: true\n\n## Work Review Reply\n\nStep accepted; continue.\n",
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("approved_work: true accepts only the reviewed step", proc.stdout)
-        self.assertIn("continue directly to the next step instead of stopping", proc.stdout)
+        self.assertIn("approved_work: true accepts only the reviewed execution scope", proc.stdout)
+        self.assertIn("continue directly instead of stopping", proc.stdout)
 
     def test_missing_ref_file_fails_the_call(self) -> None:
         proc, _capture, _state = self.run_skill(
-            "chat",
-            '{"message_for_codex":"Please keep [[REF:.codex-skill/refs/missing.md::Rule 2]] in mind."}',
+            "sync",
+            '{"sync_message":"Please keep [[REF:.codex-skill/refs/missing.md::Rule 2]] in mind."}',
             initial_cxsk_channels=[self.build_cxsk_channel("default", session_id="existing-session")],
         )
         self.assertNotEqual(proc.returncode, 0)
@@ -594,9 +596,9 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         self.assertEqual(reviewer["reasoning_effort"], "medium")
         self.assertEqual(reviewer["previous_session_ids"], ["current-session", "older-session"])
 
-    def test_work_sync_uses_read_only_and_accepts_markdown_sections(self) -> None:
+    def test_sync_uses_read_only_and_accepts_markdown_sections(self) -> None:
         proc, capture, _state = self.run_skill(
-            "work-sync",
+            "sync",
             '{"sync_message":"Please respond to the current review feedback."}',
             "## Discussion Reply\n\nI agree with the concern.\n\n## Plan\n\nRepair the parser first.",
             initial_cxsk_channels=[self.build_cxsk_channel("default", session_id="existing-session")],
@@ -607,10 +609,10 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         self.assertIn("Sync message from the cxsk_invoker:", capture["stdin"])
         self.assertIn("## Plan", proc.stdout)
 
-    def test_request_mutation_defaults_to_workspace_write(self) -> None:
+    def test_execute_this_plan_defaults_to_workspace_write(self) -> None:
         proc, capture, _state = self.run_skill(
-            "request-mutation",
-            '{"approved_mutation":"Implement the approved parser fix and stop."}',
+            "execute-this-plan",
+            '{"approved_plan":"Implement the approved parser fix and complete the approved plan."}',
             "Updated parser, ran validation, stopped for review.",
             initial_cxsk_channels=[self.build_cxsk_channel("default", session_id="existing-session")],
         )
@@ -618,12 +620,12 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         assert capture is not None
         self.assertEqual(self.sandbox_from_argv(capture["argv"]), "workspace-write")
         self.assertIn("workspace-write (default mutation sandbox)", capture["stdin"])
-        self.assertIn("Approved mutation from the cxsk_invoker:", capture["stdin"])
+        self.assertIn("Approved plan from the cxsk_invoker:", capture["stdin"])
 
-    def test_request_mutation_full_access_escalates_to_danger_full_access(self) -> None:
+    def test_execute_this_plan_part_full_access_escalates_to_danger_full_access(self) -> None:
         proc, capture, _state = self.run_skill(
-            "request-mutation",
-            '{"approved_mutation":"Run the approved repair step.","sandbox_mode":"full-access"}',
+            "execute-this-plan-part",
+            '{"approved_plan_part":"Run the approved large repair tranche.","sandbox_mode":"full-access"}',
             "Ran the approved repair under full access and stopped.",
             initial_cxsk_channels=[self.build_cxsk_channel("default", session_id="existing-session")],
         )
@@ -634,11 +636,12 @@ class CodexSkillIntegrationTests(unittest.TestCase):
             "danger-full-access (explicit full-access escalation approved by the cxsk_invoker)",
             capture["stdin"],
         )
+        self.assertIn("Approved plan part from the cxsk_invoker:", capture["stdin"])
 
-    def test_request_mutation_rejects_non_mutating_cxsk_channel(self) -> None:
+    def test_execute_this_plan_rejects_non_mutating_cxsk_channel(self) -> None:
         proc, _capture, _state = self.run_skill(
-            "request-mutation",
-            '{"approved_mutation":"Implement the approved parser fix and stop."}',
+            "execute-this-plan",
+            '{"approved_plan":"Implement the approved parser fix and complete the approved plan."}',
             initial_cxsk_channels=[self.build_cxsk_channel("reviewer-a", session_id="existing-session", can_mutate=False)],
             cxsk_channel_name="reviewer-a",
         )
@@ -648,7 +651,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
 
     def test_missing_thread_error_requires_explicit_dangerous_reset(self) -> None:
         proc, _capture, _state = self.run_skill(
-            "review-my-work",
+            "review-this-work",
             '{"work_for_review":"Please review the completed work."}',
             initial_cxsk_channels=[self.build_cxsk_channel("default", session_id="stale-session")],
             error="thread stale-session not found",
@@ -658,9 +661,9 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         self.assertIn("dangerous-new-session", proc.stderr)
         self.assertIn("managed cxsk_channel 'default'", proc.stderr)
 
-    def test_review_my_plan_rejects_legacy_json_reply(self) -> None:
+    def test_review_this_plan_rejects_legacy_json_reply(self) -> None:
         proc, _capture, _state = self.run_skill(
-            "review-my-plan",
+            "review-this-plan",
             '{"plan_for_review":"Change only the prompt parser and update tests."}',
             '{"approved_to_mutate":true,"plan_review_reply":"legacy json"}',
             initial_cxsk_channels=[self.build_cxsk_channel("default", session_id="existing-session")],
