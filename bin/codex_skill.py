@@ -486,6 +486,14 @@ def read_legacy_session_history(repo_root: Path) -> tuple[str, ...]:
     return normalize_previous_session_ids(data.get("previous_session_ids"))
 
 
+@dataclass(frozen=True)
+class MigrationSource:
+    kind: str
+    path: Optional[Path]
+    config: SkillConfig
+    detail: str
+
+
 def structured_config_needs_migration(raw_obj: dict[str, object]) -> bool:
     if "claude" in raw_obj:
         return True
@@ -505,14 +513,15 @@ def structured_config_needs_migration(raw_obj: dict[str, object]) -> bool:
     return False
 
 
-def migrate_agents_config_to_latest(
+def load_migration_source(
     repo_root: Path,
     *,
     default_model: Optional[str],
     default_reasoning_effort: Optional[str],
-) -> Optional[str]:
+) -> Optional[MigrationSource]:
     config_path = agents_file_path(repo_root)
     legacy_config_path = legacy_agents_file_path(repo_root)
+
     if config_path.exists():
         try:
             data = json.loads(config_path.read_text(encoding="utf-8"))
@@ -521,25 +530,18 @@ def migrate_agents_config_to_latest(
         if isinstance(data, dict):
             if not structured_config_needs_migration(data):
                 return None
-            migrated = parse_skill_config_object(data, path=config_path)
-            write_skill_config(
-                repo_root,
-                replace(migrated, version=CONFIG_VERSION, updated_at=iso_now()),
-            )
-            return (
-                "Legacy structured config was migrated to version 4 at "
-                f"{config_path}. Structural keys were normalized automatically "
-                "(for example, legacy caller fields, obsolete work_modes, and missing mutation-permission fields). User-authored "
-                "reminder text was left unchanged. If you also want old caller-facing "
-                "wording inside those reminder texts updated, have the caller confirm "
-                "that change with the user and then apply it through configure."
+            return MigrationSource(
+                kind="current-structured",
+                path=config_path,
+                config=replace(parse_skill_config_object(data, path=config_path), version=CONFIG_VERSION, updated_at=iso_now()),
+                detail="existing structured config needed normalization",
             )
         if isinstance(data, list):
-            migrated = default_skill_config([parse_agent_config(item) for item in data])
-            write_skill_config(repo_root, migrated)
-            return (
-                "Legacy array-based agent config was migrated to structured config at "
-                f"{config_path}."
+            return MigrationSource(
+                kind="current-array",
+                path=config_path,
+                config=default_skill_config([parse_agent_config(item) for item in data]),
+                detail="legacy array-based config needed normalization",
             )
         raise RuntimeError(f"Agent config file must contain a JSON object or legacy JSON array: {config_path}")
 
@@ -549,22 +551,18 @@ def migrate_agents_config_to_latest(
         except json.JSONDecodeError as exc:
             raise RuntimeError(f"Invalid agent config JSON in {legacy_config_path}: {exc.msg}") from exc
         if isinstance(data, dict):
-            migrated = parse_skill_config_object(data, path=legacy_config_path)
-            write_skill_config(
-                repo_root,
-                replace(migrated, version=CONFIG_VERSION, updated_at=iso_now()),
-            )
-            return (
-                "Legacy config location was migrated from "
-                f"{legacy_config_path} to {config_path}. Structural keys were normalized automatically when needed. "
-                "User-authored reminder text was left unchanged."
+            return MigrationSource(
+                kind="legacy-structured",
+                path=legacy_config_path,
+                config=replace(parse_skill_config_object(data, path=legacy_config_path), version=CONFIG_VERSION, updated_at=iso_now()),
+                detail="legacy structured config from the old directory",
             )
         if isinstance(data, list):
-            migrated = default_skill_config([parse_agent_config(item) for item in data])
-            write_skill_config(repo_root, migrated)
-            return (
-                "Legacy array-based agent config location was migrated from "
-                f"{legacy_config_path} to {config_path}."
+            return MigrationSource(
+                kind="legacy-array",
+                path=legacy_config_path,
+                config=default_skill_config([parse_agent_config(item) for item in data]),
+                detail="legacy array-based config from the old directory",
             )
         raise RuntimeError(f"Agent config file must contain a JSON object or legacy JSON array: {legacy_config_path}")
 
@@ -581,10 +579,42 @@ def migrate_agents_config_to_latest(
         reasoning_effort=default_reasoning_effort,
         previous_session_ids=legacy_history,
     )
-    write_skill_config(repo_root, default_skill_config([migrated]))
+    return MigrationSource(
+        kind="legacy-session",
+        path=legacy_session_file_path(repo_root),
+        config=default_skill_config([migrated]),
+        detail="legacy single-session continuity files",
+    )
+
+
+def migrate_agents_config_to_latest(
+    repo_root: Path,
+    *,
+    default_model: Optional[str],
+    default_reasoning_effort: Optional[str],
+) -> Optional[str]:
+    source = load_migration_source(
+        repo_root,
+        default_model=default_model,
+        default_reasoning_effort=default_reasoning_effort,
+    )
+    if source is None:
+        return None
+    write_skill_config(repo_root, source.config)
+    destination = agents_file_path(repo_root)
+    if source.kind == "legacy-session":
+        return (
+            "Legacy session continuity files were read, normalized, and rewritten into the canonical config at "
+            f"{destination}."
+        )
+    if source.path is not None and source.path != destination:
+        return (
+            f"Legacy config at {source.path} was read, normalized, and rewritten into the canonical config at {destination}. "
+            "User-authored reminder text was left unchanged."
+        )
     return (
-        "Legacy single-session config was migrated from "
-        f"{legacy_session_file_path(repo_root)} to {agents_file_path(repo_root)} as agent '{DEFAULT_AGENT_NAME}'."
+        f"Config at {destination} was normalized and rewritten into the canonical version {CONFIG_VERSION} format. "
+        "User-authored reminder text was left unchanged."
     )
 
 

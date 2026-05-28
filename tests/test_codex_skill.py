@@ -278,7 +278,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         self.assertIn("resume", capture["argv"])
         self.assertIn("legacy-session", capture["argv"])
         self.assertIn("Migration notice:", proc.stdout)
-        self.assertIn("Legacy single-session config was migrated", proc.stdout)
+        self.assertIn("Legacy session continuity files were read, normalized, and rewritten into the canonical config", proc.stdout)
         agent = self.find_agent(state, "default")
         self.assertEqual(agent["session_id"], "legacy-session")
         self.assertEqual(agent["previous_session_ids"], ["older-session", "oldest-session"])
@@ -322,7 +322,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         self.assertIn("resume", capture["argv"])
         self.assertIn("legacy-structured-session", capture["argv"])
         self.assertIn("Migration notice:", proc.stdout)
-        self.assertIn("Legacy config location was migrated from", proc.stdout)
+        self.assertIn("was read, normalized, and rewritten into the canonical config", proc.stdout)
         self.assertIn("User-authored reminder text was left unchanged.", proc.stdout)
         payload = state["agents_payload"]
         assert payload is not None
