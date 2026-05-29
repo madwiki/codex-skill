@@ -1363,23 +1363,6 @@ def build_labeled_content_block(tag_name: str, label: str, content: str) -> str:
     return wrap_tagged_block(tag_name, f"{label}\n{content.strip()}")
 
 
-def build_brief_user_reminder(label: str, items: list[tuple[str, str]], stage_name: str) -> str:
-    if not items:
-        return ""
-    active = ", ".join(title for title, _body in items)
-    emphasis_lines: list[str] = []
-    for title, body in items:
-        if "Mutation Permission" in title:
-            emphasis_lines.append(f"- {body}")
-    return (
-        f"The configured {label} still applies.\n"
-        f"Current stage: {stage_name}.\n"
-        f"Active reminder fields: {active}.\n"
-        + ("\n".join(emphasis_lines) + "\n" if emphasis_lines else "")
-        + "Do not drift from that configured reminder just because the full text is omitted in this turn."
-    )
-
-
 def build_codex_skill_reminder_text_for_codex(
     tool: str,
     *,
@@ -1393,25 +1376,30 @@ def build_codex_skill_reminder_text_for_codex(
         "sync": (
             "Persistent collaboration turn with the cxsk_invoker, not the end user. "
             "Sync only; discussion, coordination, disagreement handling, and review relay are allowed, but mutation is not. "
+            "The configured User Reminder still applies in full. "
             "Return ## Discussion Reply, and add ## Plan only when a candidate plan is genuinely ready. "
             "Compare evidence, surface disagreement clearly, and only ask the cxsk_invoker to escalate to the user "
             "if a real unresolved disagreement between you and the cxsk_invoker has persisted for about 10 turns."
         ),
         "review-this-plan": (
             "Hard gate. Review the plan before any mutation, do not mutate in this turn, and judge from facts and whole-system coherence. "
+            "The configured User Reminder still applies in full. "
             "The first non-empty line must be approved_to_mutate: true or approved_to_mutate: false, followed by ## Plan Review Reply. "
             "Do not ask for user input unless a real unresolved disagreement between you and the cxsk_invoker has persisted for about 10 turns."
         ),
         "review-this-work": (
             "Hard gate. Review the actual work, not intent; do not mutate in this turn. "
+            "The configured User Reminder still applies in full. "
             "The first non-empty line must be approved_work: true or approved_work: false, followed by ## Work Review Reply. "
             "Do not ask for user input unless a real unresolved disagreement between you and the cxsk_invoker has persisted for about 10 turns."
         ),
         "execute-this-plan": (
+            "The configured User Reminder still applies in full. "
             "Execution turn for a mutate-capable cxsk_channel. Execute the approved plan as a substantial unit, do not stop for trivial progress, and only stop when the approved plan is complete or a real blocker prevents safe continuation. "
             "Do not widen scope and do not ask the user directly."
         ),
         "execute-this-plan-part": (
+            "The configured User Reminder still applies in full. "
             "Execution turn for a mutate-capable cxsk_channel. Use a plan part only when the full plan is genuinely too large; a plan part must still be a substantial coherent chunk, not a trivial fragment. "
             "Do not stop for incidental small edits. Stop only when the approved plan part is complete or a real blocker prevents safe continuation."
         ),
@@ -1463,11 +1451,11 @@ def build_codex_skill_reminder_text_for_invoker(tool: str, *, full: bool) -> str
     brief_map = {
         "init": "Init re-establishes the collaboration baseline. Use full reminders here.",
         "invoke": "Preferred blocking wrapper for one or more cxsk_channel calls. Let invoke wait once and return settled results; do not externally poll.",
-        "sync": "General sync only. No mutation permission. Full Codex Skill reminder still applies. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
-        "review-this-plan": "Hard gate before execution. Full Codex Skill reminder still applies. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
-        "review-this-work": "Hard gate before accepted delivery. approved_work: true accepts only the reviewed execution scope; continue if more agreed scopes remain. Full Codex Skill reminder still applies. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
-        "execute-this-plan": "Execute the approved plan as a substantial whole. Do not stop for trivial progress. Full Codex Skill reminder still applies.",
-        "execute-this-plan-part": "Execute only the approved plan part, and only use plan-part mode for genuinely large plans. The approved part must still be substantial. Full Codex Skill reminder still applies.",
+        "sync": "General sync only. No mutation permission. Full Codex Skill reminder still applies, and the configured User Reminder still applies in full. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
+        "review-this-plan": "Hard gate before execution. Full Codex Skill reminder still applies, and the configured User Reminder still applies in full. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
+        "review-this-work": "Hard gate before accepted delivery. approved_work: true accepts only the reviewed execution scope; continue if more agreed scopes remain. Full Codex Skill reminder still applies, and the configured User Reminder still applies in full. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
+        "execute-this-plan": "Execute the approved plan as a substantial whole. Do not stop for trivial progress. Full Codex Skill reminder still applies, and the configured User Reminder still applies in full.",
+        "execute-this-plan-part": "Execute only the approved plan part, and only use plan-part mode for genuinely large plans. The approved part must still be substantial. Full Codex Skill reminder still applies, and the configured User Reminder still applies in full.",
         "configure": "CXSK invoker-supplied config patch only. Full Codex Skill reminder still applies.",
         "update-config": "Config update only. Full Codex Skill reminder still applies.",
         "dangerous-new-session": "Destructive continuity replacement. Full Codex Skill reminder still applies.",
@@ -1603,18 +1591,12 @@ def compose_prompt(
         ),
     )
 
-    if full_reminder:
-        user_body = render_named_items(agent_items)
-    else:
-        user_body = build_brief_user_reminder("User Reminder", agent_items, tool)
+    user_body = render_named_items(agent_items)
     user_block = ""
     if user_body:
         user_block = wrap_tagged_block(
-            "USER_REMINDER_FULL" if full_reminder else "USER_REMINDER_BRIEF",
-            "## User Reminder ({})\n\n{}".format(
-                "Full" if full_reminder else "Brief",
-                user_body,
-            ),
+            "USER_REMINDER",
+            "## User Reminder\n\n{}".format(user_body),
         )
 
     ref_notice_sections = build_reference_notice(repo_root, [skill_block, user_block, *base_parts[1:]])
@@ -1649,18 +1631,12 @@ def format_output_for_cxsk_invoker(
         ),
     )
 
-    if full_reminder:
-        user_body = render_named_items(cxsk_invoker_items)
-    else:
-        user_body = build_brief_user_reminder("User Reminder", cxsk_invoker_items, tool)
+    user_body = render_named_items(cxsk_invoker_items)
     user_block = ""
     if user_body:
         user_block = wrap_tagged_block(
-            "USER_REMINDER_FULL" if full_reminder else "USER_REMINDER_BRIEF",
-            "## User Reminder ({})\n\n{}".format(
-                "Full" if full_reminder else "Brief",
-                user_body,
-            ),
+            "USER_REMINDER",
+            "## User Reminder\n\n{}".format(user_body),
         )
 
     ref_notice_sections = build_reference_notice(repo_root, [skill_block, user_block])

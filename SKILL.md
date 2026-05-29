@@ -52,12 +52,13 @@ Top-level fields:
 - `cxsk_invoker.*` is cxsk_invoker-side guidance. It is returned to the cxsk_invoker in wrapper output and is not injected into Codex prompts.
 - `shared_stages` is common stage guidance. It may be shown on both sides.
 - `cxsk_channels[*].*` is cxsk_channel-side guidance. It is injected only into the currently targeted Codex prompt.
-- Wrapper-injected system guidance is labeled `Codex Skill Reminder`.
-- User-configured guidance is labeled `User Reminder`.
+- Wrapper-injected system guidance is labeled `Codex Skill Reminder` and may use full or brief form.
+- User-configured guidance is labeled `User Reminder` and remains the full configured content.
 - Wrapper-generated blocks are boundary-tagged with `<<<NAME.BEGIN>>> ... <<<NAME.END>>>`.
 - Block names use underscores; block state uses dotted suffixes such as `.BEGIN` and `.END`.
-- `init` always carries full reminders.
-- Ongoing turns use a 3-turn cadence per cxsk_channel: full reminder on turns 1, 4, 7, ... and brief reminder on the two turns in between.
+- `init` always carries the full Codex Skill Reminder and the full User Reminder.
+- Ongoing turns use a 3-turn cadence only for the Codex Skill Reminder: full on turns 1, 4, 7, ... and brief on the two turns in between.
+- The User Reminder always remains the full configured content; the Codex Skill Reminder brief form explicitly reminds that the full User Reminder still applies.
 
 ## References
 
