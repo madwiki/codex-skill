@@ -1,6 +1,6 @@
 # invoke
 
-Use `invoke` as the preferred wrapper command when the cxsk_invoker wants one blocking call that drives one or more cxsk_channels and waits for settled results.
+Use `invoke` as the preferred wrapper command when the mams_invoker wants one blocking call that drives one or more mams_channels and waits for settled results.
 
 ## When to use it
 
@@ -9,13 +9,14 @@ Use `invoke` as the preferred wrapper command when the cxsk_invoker wants one bl
 - one long `review-this-work`
 - fanout to multiple reviewers or planners without external polling
 - a single execution call when you still want the same blocking wrapper entrypoint
+- mixed runner fanout, such as some channels on Codex and others on Claude Code
 
 ## Why use it
 
 - the wrapper blocks once and waits internally
 - read-only fanout can run concurrently
 - mutating requests still run through the same wrapper entrypoint
-- the cxsk_invoker does not need to poll for status
+- the mams_invoker does not need to poll for status
 - the wrapper watches process health while waiting
 
 ## Input
@@ -27,7 +28,7 @@ Single request:
 ```json
 {
   "command": "review-this-plan",
-  "cxsk_channel": "reviewer-a",
+  "mams_channel": "reviewer-a",
   "input": {
     "plan_for_review": "..."
   }
@@ -41,14 +42,14 @@ Multiple requests:
   "requests": [
     {
       "command": "review-this-plan",
-      "cxsk_channel": "reviewer-a",
+      "mams_channel": "reviewer-a",
       "input": {
         "plan_for_review": "..."
       }
     },
     {
       "command": "review-this-plan",
-      "cxsk_channel": "reviewer-b",
+      "mams_channel": "reviewer-b",
       "input": {
         "plan_for_review": "..."
       }
@@ -68,24 +69,24 @@ Multiple requests:
   - `execute-this-plan-part`
 - if all requests are read-only, `invoke` fans them out concurrently
 - if any request is mutating, `invoke` runs the requests sequentially
-- do not target the same `cxsk_channel` twice in one `invoke` call
+- do not target the same `mams_channel` twice in one `invoke` call
 
 ## Usage
 
 ```bash
-bin/codex-skill-invoke --cwd <repo> <<'JSON'
+bin/invoke --cwd <repo> <<'JSON'
 {
   "requests": [
     {
       "command": "sync",
-      "cxsk_channel": "planner",
+      "mams_channel": "planner",
       "input": {
         "sync_message": "..."
       }
     },
     {
       "command": "review-this-plan",
-      "cxsk_channel": "reviewer-a",
+      "mams_channel": "reviewer-a",
       "input": {
         "plan_for_review": "..."
       }

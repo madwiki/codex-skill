@@ -10,11 +10,11 @@ from typing import Optional, Tuple
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "bin" / "codex_skill.py"
-CHANNELS_FILENAME = "cxsk_channels.json"
+SCRIPT = ROOT / "bin" / "mad_agent_mesh.py"
+CHANNELS_FILENAME = "mams_channels.json"
 LEGACY_SESSION_FILENAME = "codex_session.json"
 LEGACY_HISTORY_FILENAME = "codex_session_history.json"
-MANAGED_DIRNAME = ".codex-skill"
+MANAGED_DIRNAME = ".mad-agent-mesh"
 LEGACY_DIRNAME = ".claude"
 
 FAKE_CODEX_SOURCE = textwrap.dedent(
@@ -27,9 +27,9 @@ FAKE_CODEX_SOURCE = textwrap.dedent(
     from pathlib import Path
 
     args = sys.argv[1:]
-    reply = os.environ["FAKE_CODEX_REPLY"]
+    reply = os.environ["FAKE_CHANNEL_REPLY"]
     forced_error = os.environ.get("FAKE_CODEX_ERROR")
-    reply_map = json.loads(os.environ.get("FAKE_CODEX_REPLY_MAP", "{}"))
+    reply_map = json.loads(os.environ.get("FAKE_CHANNEL_REPLY_MAP", "{}"))
     error_map = json.loads(os.environ.get("FAKE_CODEX_ERROR_MAP", "{}"))
     session_map = json.loads(os.environ.get("FAKE_CODEX_SESSION_MAP", "{}"))
     sleep_s = float(os.environ.get("FAKE_CODEX_SLEEP_S", "0"))
@@ -86,11 +86,81 @@ FAKE_CODEX_SOURCE = textwrap.dedent(
     """
 )
 
+FAKE_CLAUDE_SOURCE = textwrap.dedent(
+    """\
+    #!/usr/bin/env python3
+    import json
+    import os
+    import time
+    import sys
+    from pathlib import Path
 
-class CodexSkillIntegrationTests(unittest.TestCase):
+    args = sys.argv[1:]
+    reply = os.environ["FAKE_CHANNEL_REPLY"]
+    forced_error = os.environ.get("FAKE_CODEX_ERROR")
+    reply_map = json.loads(os.environ.get("FAKE_CHANNEL_REPLY_MAP", "{}"))
+    error_map = json.loads(os.environ.get("FAKE_CODEX_ERROR_MAP", "{}"))
+    session_map = json.loads(os.environ.get("FAKE_CODEX_SESSION_MAP", "{}"))
+    sleep_s = float(os.environ.get("FAKE_CODEX_SLEEP_S", "0"))
+    capture_path = os.environ.get("FAKE_CODEX_CAPTURE")
+    stdin_text = sys.stdin.read()
+
+    for key, mapped_reply in reply_map.items():
+        if key in stdin_text:
+            reply = mapped_reply
+            break
+
+    for key, mapped_error in error_map.items():
+        if key in stdin_text:
+            forced_error = mapped_error
+            break
+
+    if capture_path:
+        Path(capture_path).write_text(
+            json.dumps({"argv": args, "stdin": stdin_text, "runner": "claude-code"}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    if forced_error:
+        print(forced_error, file=sys.stderr)
+        sys.exit(1)
+
+    if sleep_s > 0:
+        time.sleep(sleep_s)
+
+    session_id = "claude-session"
+    if "--resume" in args:
+        try:
+            session_id = args[args.index("--resume") + 1]
+        except Exception:
+            session_id = "claude-session"
+    else:
+        for key, mapped_session_id in session_map.items():
+            if key in stdin_text:
+                session_id = mapped_session_id
+                break
+
+    output_format = "json"
+    if "--output-format" in args:
+        try:
+            output_format = args[args.index("--output-format") + 1]
+        except Exception:
+            output_format = "json"
+
+    if output_format == "stream-json":
+        print(json.dumps({"type": "system", "subtype": "init", "session_id": session_id}), flush=True)
+        print(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "working"}]}}), flush=True)
+        print(json.dumps({"type": "result", "session_id": session_id, "result": reply}), flush=True)
+    else:
+        print(json.dumps({"session_id": session_id, "result": reply}), flush=True)
+    """
+)
+
+
+class MadAgentMeshIntegrationTests(unittest.TestCase):
     maxDiff = None
 
-    def build_cxsk_channel(
+    def build_mams_channel(
         self,
         name: str,
         *,
@@ -100,6 +170,8 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         extra_context: Optional[str] = None,
         stage_guidance: Optional[dict[str, str]] = None,
         can_mutate: bool = True,
+        runner: str = "codex",
+        runner_config: Optional[dict] = None,
         session_id: Optional[str] = None,
         model: Optional[str] = None,
         reasoning_effort: Optional[str] = None,
@@ -108,12 +180,14 @@ class CodexSkillIntegrationTests(unittest.TestCase):
     ) -> dict:
         return {
             "name": name,
-            "description": description or f"Managed CXSK channel '{name}'.",
+            "description": description or f"Managed MAMS channel '{name}'.",
             "focus": focus,
             "baseline": baseline,
             "extra_context": extra_context,
             "stage_guidance": stage_guidance or {},
             "can_mutate": can_mutate,
+            "runner": runner,
+            "runner_config": runner_config or {},
             "session_id": session_id,
             "model": model,
             "reasoning_effort": reasoning_effort,
@@ -124,14 +198,14 @@ class CodexSkillIntegrationTests(unittest.TestCase):
 
     def build_config(
         self,
-        cxsk_channels: list[dict],
+        mams_channels: list[dict],
         *,
-        cxsk_invoker: Optional[dict] = None,
+        mams_invoker: Optional[dict] = None,
         shared_stages: Optional[dict[str, str]] = None,
     ) -> dict:
         return {
             "version": 5,
-            "cxsk_invoker": cxsk_invoker or {
+            "mams_invoker": mams_invoker or {
                 "baseline": None,
                 "working_style": None,
                 "extra_context": None,
@@ -139,7 +213,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
                 "can_mutate": True,
             },
             "shared_stages": shared_stages or {},
-            "cxsk_channels": cxsk_channels,
+            "mams_channels": mams_channels,
             "updated_at": "2026-05-26T00:00:00Z",
         }
 
@@ -149,10 +223,10 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         payload: str,
         reply: str = "",
         *,
-        cxsk_channel_name: str = "default",
+        mams_channel_name: str = "default",
         initial_config: Optional[dict] = None,
         initial_legacy_config: Optional[dict] = None,
-        initial_cxsk_channels: Optional[list[dict]] = None,
+        initial_mams_channels: Optional[list[dict]] = None,
         legacy_session_id: Optional[str] = None,
         legacy_history_ids: Optional[list[str]] = None,
         error: Optional[str] = None,
@@ -185,9 +259,9 @@ class CodexSkillIntegrationTests(unittest.TestCase):
                     json.dumps(initial_legacy_config, ensure_ascii=False, indent=2) + "\n",
                     encoding="utf-8",
                 )
-            elif initial_cxsk_channels is not None:
+            elif initial_mams_channels is not None:
                 (managed_dir / CHANNELS_FILENAME).write_text(
-                    json.dumps(self.build_config(initial_cxsk_channels), ensure_ascii=False, indent=2) + "\n",
+                    json.dumps(self.build_config(initial_mams_channels), ensure_ascii=False, indent=2) + "\n",
                     encoding="utf-8",
                 )
 
@@ -206,11 +280,15 @@ class CodexSkillIntegrationTests(unittest.TestCase):
             fake_codex = tmp / "fake-codex.py"
             fake_codex.write_text(FAKE_CODEX_SOURCE, encoding="utf-8")
             fake_codex.chmod(0o755)
+            fake_claude = tmp / "fake-claude.py"
+            fake_claude.write_text(FAKE_CLAUDE_SOURCE, encoding="utf-8")
+            fake_claude.chmod(0o755)
 
             env = os.environ.copy()
             env["CODEX_BIN"] = str(fake_codex)
+            env["CLAUDE_BIN"] = str(fake_claude)
             env["CODEX_HOME"] = str(tmp / "codex-home")
-            env["FAKE_CODEX_REPLY"] = reply
+            env["FAKE_CHANNEL_REPLY"] = reply
             capture_path = tmp / "capture.json"
             env["FAKE_CODEX_CAPTURE"] = str(capture_path)
             if error is not None:
@@ -218,7 +296,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
             if env_extra:
                 env.update(env_extra)
 
-            argv = [sys.executable, str(SCRIPT), "--cwd", str(workspace), "--cxsk-channel", cxsk_channel_name]
+            argv = [sys.executable, str(SCRIPT), "--cwd", str(workspace), "--mams-channel", mams_channel_name]
             if extra_args:
                 argv.extend(extra_args)
             argv.append(cmd)
@@ -238,8 +316,8 @@ class CodexSkillIntegrationTests(unittest.TestCase):
 
             agents_path = managed_dir / CHANNELS_FILENAME
             state = {
-                "cxsk_channels_exists": agents_path.exists(),
-                "cxsk_channels_payload": (
+                "mams_channels_exists": agents_path.exists(),
+                "mams_channels_payload": (
                     json.loads(agents_path.read_text(encoding="utf-8")) if agents_path.exists() else None
                 ),
                 "legacy_session_exists": (legacy_dir / LEGACY_SESSION_FILENAME).exists(),
@@ -253,20 +331,20 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         return argv[index + 1]
 
     @staticmethod
-    def find_cxsk_channel(state: dict, name: str) -> dict:
-        cxsk_channels_payload = state["cxsk_channels_payload"] or {}
-        cxsk_channels = cxsk_channels_payload.get("cxsk_channels", [])
-        for cxsk_channel in cxsk_channels:
-            if cxsk_channel["name"] == name:
-                return cxsk_channel
-        raise AssertionError(f"CXSK channel not found in state: {name}")
+    def find_mams_channel(state: dict, name: str) -> dict:
+        mams_channels_payload = state["mams_channels_payload"] or {}
+        mams_channels = mams_channels_payload.get("mams_channels", [])
+        for mams_channel in mams_channels:
+            if mams_channel["name"] == name:
+                return mams_channel
+        raise AssertionError(f"MAMS channel not found in state: {name}")
 
     def test_existing_agent_session_is_resumed_by_default(self) -> None:
         proc, capture, _state = self.run_skill(
             "review-this-plan",
             '{"plan_for_review":"Change only the prompt parser and update tests."}',
             "approved_to_mutate: true\n\n## Plan Review Reply\n\nBoundary is acceptable.",
-            initial_cxsk_channels=[self.build_cxsk_channel("default", session_id="resume-me")],
+            initial_mams_channels=[self.build_mams_channel("default", session_id="resume-me")],
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         assert capture is not None
@@ -283,10 +361,10 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         assert capture is not None
         self.assertNotIn("resume", capture["argv"])
-        self.assertTrue(state["cxsk_channels_exists"])
-        cxsk_channel = self.find_cxsk_channel(state, "default")
-        self.assertEqual(cxsk_channel["session_id"], "test-session")
-        self.assertEqual(cxsk_channel["name"], "default")
+        self.assertTrue(state["mams_channels_exists"])
+        mams_channel = self.find_mams_channel(state, "default")
+        self.assertEqual(mams_channel["session_id"], "test-session")
+        self.assertEqual(mams_channel["name"], "default")
 
     def test_legacy_single_session_is_migrated_once_before_resume(self) -> None:
         proc, capture, state = self.run_skill(
@@ -302,9 +380,9 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         self.assertIn("legacy-session", capture["argv"])
         self.assertIn("Migration notice:", proc.stdout)
         self.assertIn("Legacy session continuity files were read, normalized, and rewritten into the canonical config", proc.stdout)
-        cxsk_channel = self.find_cxsk_channel(state, "default")
-        self.assertEqual(cxsk_channel["session_id"], "legacy-session")
-        self.assertEqual(cxsk_channel["previous_session_ids"], ["older-session", "oldest-session"])
+        mams_channel = self.find_mams_channel(state, "default")
+        self.assertEqual(mams_channel["session_id"], "legacy-session")
+        self.assertEqual(mams_channel["previous_session_ids"], ["older-session", "oldest-session"])
 
     def test_legacy_structured_config_is_migrated_to_version_5(self) -> None:
         legacy_config = {
@@ -330,8 +408,8 @@ class CodexSkillIntegrationTests(unittest.TestCase):
                     "stages": {}
                 },
             },
-            "cxsk_channels": [
-                self.build_cxsk_channel("default", session_id="legacy-structured-session"),
+            "mams_channels": [
+                self.build_mams_channel("default", session_id="legacy-structured-session"),
             ],
         }
         proc, capture, state = self.run_skill(
@@ -347,51 +425,51 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         self.assertIn("Migration notice:", proc.stdout)
         self.assertIn("was read, normalized, and rewritten into the canonical config", proc.stdout)
         self.assertIn("User-authored reminder text was left unchanged.", proc.stdout)
-        payload = state["cxsk_channels_payload"]
+        payload = state["mams_channels_payload"]
         assert payload is not None
         self.assertEqual(payload["version"], 5)
-        self.assertIn("cxsk_invoker", payload)
+        self.assertIn("mams_invoker", payload)
         self.assertNotIn("claude", payload)
-        self.assertEqual(payload["cxsk_invoker"]["baseline"], "Keep the original task stable.")
-        self.assertEqual(payload["cxsk_invoker"]["stage_guidance"]["review-this-plan"], "Require concrete scope.")
+        self.assertEqual(payload["mams_invoker"]["baseline"], "Keep the original task stable.")
+        self.assertEqual(payload["mams_invoker"]["stage_guidance"]["review-this-plan"], "Require concrete scope.")
         self.assertEqual(payload["shared_stages"]["sync"], "Discussion only.")
-        self.assertTrue(payload["cxsk_invoker"]["can_mutate"])
+        self.assertTrue(payload["mams_invoker"]["can_mutate"])
         self.assertNotIn("work_modes", payload)
 
-    def test_named_cxsk_channel_is_created_when_selected(self) -> None:
+    def test_named_mams_channel_is_created_when_selected(self) -> None:
         proc, _capture, state = self.run_skill(
             "init",
             '{"task_background":"Current task brief"}',
-            "## Task Understanding Reply\n\nSwitch to Codex-owned execution.",
-            cxsk_channel_name="reviewer-a",
+            "## Task Understanding Reply\n\nSwitch to managed execution.",
+            mams_channel_name="reviewer-a",
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        cxsk_channel = self.find_cxsk_channel(state, "reviewer-a")
-        self.assertEqual(cxsk_channel["session_id"], "test-session")
-        self.assertEqual(cxsk_channel["description"], "Managed CXSK channel 'reviewer-a'.")
+        mams_channel = self.find_mams_channel(state, "reviewer-a")
+        self.assertEqual(mams_channel["session_id"], "test-session")
+        self.assertEqual(mams_channel["description"], "Managed MAMS channel 'reviewer-a'.")
 
-    def test_effective_defaults_are_persisted_for_new_cxsk_channel(self) -> None:
+    def test_effective_defaults_are_persisted_for_new_mams_channel(self) -> None:
         proc, _capture, state = self.run_skill(
             "init",
             '{"task_background":"Current task brief"}',
             "## Task Understanding Reply\n\nLooks consistent.",
-            cxsk_channel_name="baseline",
+            mams_channel_name="baseline",
             env_extra={
                 "CODEX_MODEL": "gpt-test",
                 "CODEX_REASONING_EFFORT": "high",
             },
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        cxsk_channel = self.find_cxsk_channel(state, "baseline")
-        self.assertEqual(cxsk_channel["model"], "gpt-test")
-        self.assertEqual(cxsk_channel["reasoning_effort"], "high")
+        mams_channel = self.find_mams_channel(state, "baseline")
+        self.assertEqual(mams_channel["model"], "gpt-test")
+        self.assertEqual(mams_channel["reasoning_effort"], "high")
 
-    def test_configure_updates_cxsk_invoker_and_cxsk_channel_fields(self) -> None:
+    def test_configure_updates_mams_invoker_and_mams_channel_fields(self) -> None:
         proc, _capture, state = self.run_skill(
             "configure",
             json.dumps(
                 {
-                    "cxsk_invoker": {
+                    "mams_invoker": {
                     "baseline": "Keep original requirements stable.",
                     "working_style": "Discuss before mutating.",
                     "stage_guidance": {
@@ -402,7 +480,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
                 "shared_stages": {
                     "init": "Always re-check continuity assumptions."
                 },
-                    "cxsk_channels": [
+                    "mams_channels": [
                         {
                             "name": "reviewer-a",
                             "focus": "Watch for architectural drift.",
@@ -418,15 +496,15 @@ class CodexSkillIntegrationTests(unittest.TestCase):
                 },
                 ensure_ascii=False,
             ),
-            initial_cxsk_channels=[self.build_cxsk_channel("default", session_id="existing-session")],
+            initial_mams_channels=[self.build_mams_channel("default", session_id="existing-session")],
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        payload = state["cxsk_channels_payload"]
+        payload = state["mams_channels_payload"]
         assert payload is not None
-        self.assertEqual(payload["cxsk_invoker"]["baseline"], "Keep original requirements stable.")
-        self.assertFalse(payload["cxsk_invoker"]["can_mutate"])
+        self.assertEqual(payload["mams_invoker"]["baseline"], "Keep original requirements stable.")
+        self.assertFalse(payload["mams_invoker"]["can_mutate"])
         self.assertEqual(payload["shared_stages"]["init"], "Always re-check continuity assumptions.")
-        reviewer = self.find_cxsk_channel(state, "reviewer-a")
+        reviewer = self.find_mams_channel(state, "reviewer-a")
         self.assertEqual(reviewer["focus"], "Watch for architectural drift.")
         self.assertFalse(reviewer["can_mutate"])
         self.assertEqual(reviewer["model"], "gpt-review")
@@ -437,62 +515,62 @@ class CodexSkillIntegrationTests(unittest.TestCase):
             "",
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertTrue(state["cxsk_channels_exists"])
-        payload = state["cxsk_channels_payload"]
+        self.assertTrue(state["mams_channels_exists"])
+        payload = state["mams_channels_payload"]
         assert payload is not None
         self.assertEqual(payload["version"], 5)
-        self.assertEqual(payload["cxsk_channels"], [])
+        self.assertEqual(payload["mams_channels"], [])
         self.assertIn("update-config applied.", proc.stdout)
         self.assertIn("Created a canonical managed config because no prior managed config was present.", proc.stdout)
 
     def test_prompt_includes_config_sections_and_ref_notice(self) -> None:
         proc, capture, _state = self.run_skill(
             "review-this-plan",
-            '{"plan_for_review":"Review the plan against [[REF:.codex-skill/refs/rules.md::Rule 5]]."}',
+            '{"plan_for_review":"Review the plan against [[REF:.mad-agent-mesh/refs/rules.md::Rule 5]]."}',
             "approved_to_mutate: true\n\n## Plan Review Reply\n\nLooks acceptable.",
-            initial_cxsk_channels=[
-                self.build_cxsk_channel(
+            initial_mams_channels=[
+                self.build_mams_channel(
                     "default",
                     session_id="existing-session",
-                    focus="Watch for drift against [[REF:.codex-skill/refs/rules.md::Rule 5]].",
+                    focus="Watch for drift against [[REF:.mad-agent-mesh/refs/rules.md::Rule 5]].",
                     baseline="Keep the original requirements stable.",
-                    stage_guidance={"review-this-plan": "Use [[REF:.codex-skill/refs/rules.md::Rule 10]]."},
+                    stage_guidance={"review-this-plan": "Use [[REF:.mad-agent-mesh/refs/rules.md::Rule 10]]."},
                 )
             ],
             ref_files={
-                ".codex-skill/refs/rules.md": "# Rules\n\nRule 5\nRule 10\n",
+                ".mad-agent-mesh/refs/rules.md": "# Rules\n\nRule 5\nRule 10\n",
             },
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         assert capture is not None
-        self.assertIn("<<<CODEX_SKILL_REMINDER_FULL.BEGIN>>>", capture["stdin"])
-        self.assertIn("<<<CODEX_SKILL_REMINDER_FULL.END>>>", capture["stdin"])
+        self.assertIn("<<<MAMS_REMINDER_FULL.BEGIN>>>", capture["stdin"])
+        self.assertIn("<<<MAMS_REMINDER_FULL.END>>>", capture["stdin"])
         self.assertIn("<<<USER_REMINDER.BEGIN>>>", capture["stdin"])
         self.assertIn("<<<USER_REMINDER.END>>>", capture["stdin"])
         self.assertIn("<<<REFERENCE_NOTICE.BEGIN>>>", capture["stdin"])
         self.assertIn("<<<REFERENCE_NOTICE.END>>>", capture["stdin"])
         self.assertIn("<<<PLAN_FOR_REVIEW.BEGIN>>>", capture["stdin"])
         self.assertIn("<<<PLAN_FOR_REVIEW.END>>>", capture["stdin"])
-        self.assertIn("## Codex Skill Reminder (Full)", capture["stdin"])
+        self.assertIn("## Mad Agent Mesh Reminder (Full)", capture["stdin"])
         self.assertIn("## User Reminder", capture["stdin"])
         self.assertIn("## Reference Handling Notice", capture["stdin"])
-        self.assertIn("[[REF:.codex-skill/refs/rules.md::Rule 5]]", capture["stdin"])
-        self.assertIn("### CXSK Channel Focus", capture["stdin"])
-        self.assertIn("### CXSK Channel Stage Guidance", capture["stdin"])
+        self.assertIn("[[REF:.mad-agent-mesh/refs/rules.md::Rule 5]]", capture["stdin"])
+        self.assertIn("### MAMS Channel Focus", capture["stdin"])
+        self.assertIn("### MAMS Channel Stage Guidance", capture["stdin"])
 
     def test_caller_side_guidance_is_not_sent_to_codex_but_is_returned_to_caller(self) -> None:
         initial_config = self.build_config(
             [
-                self.build_cxsk_channel(
+                self.build_mams_channel(
                     "default",
                     session_id="existing-session",
                     focus="Watch for architectural drift.",
                     baseline="Keep the original requirements stable.",
                 )
             ],
-            cxsk_invoker={
-                "baseline": "The cxsk_invoker must keep the original user constraints stable.",
-                "working_style": "Use Codex Skill, not raw Codex.",
+            mams_invoker={
+                "baseline": "The mams_invoker must keep the original user constraints stable.",
+                "working_style": "Use Mad Agent Mesh, not raw runner CLIs.",
                 "extra_context": None,
                 "stage_guidance": {
                     "review-this-plan": "Before execution, insist on a concrete plan."
@@ -511,27 +589,27 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         assert capture is not None
-        self.assertNotIn("## CXSK Invoker Baseline", capture["stdin"])
-        self.assertNotIn("## CXSK Invoker Working Style", capture["stdin"])
-        self.assertNotIn("## CXSK Invoker Stage Guidance", capture["stdin"])
+        self.assertNotIn("## MAMS Invoker Baseline", capture["stdin"])
+        self.assertNotIn("## MAMS Invoker Working Style", capture["stdin"])
+        self.assertNotIn("## MAMS Invoker Stage Guidance", capture["stdin"])
         self.assertIn("### Shared Stage Guidance", capture["stdin"])
-        self.assertIn("<<<CODEX_SKILL_REMINDER_FULL.BEGIN>>>", proc.stdout)
+        self.assertIn("<<<MAMS_REMINDER_FULL.BEGIN>>>", proc.stdout)
         self.assertIn("<<<USER_REMINDER.BEGIN>>>", proc.stdout)
-        self.assertIn("<<<CODEX_REPLY.BEGIN>>>", proc.stdout)
-        self.assertIn("<<<CODEX_REPLY.END>>>", proc.stdout)
-        self.assertIn("## Codex Skill Reminder (Full)", proc.stdout)
+        self.assertIn("<<<CHANNEL_REPLY.BEGIN>>>", proc.stdout)
+        self.assertIn("<<<CHANNEL_REPLY.END>>>", proc.stdout)
+        self.assertIn("## Mad Agent Mesh Reminder (Full)", proc.stdout)
         self.assertIn("## User Reminder", proc.stdout)
-        self.assertIn("### CXSK Invoker Baseline", proc.stdout)
-        self.assertIn("### CXSK Invoker Working Style", proc.stdout)
-        self.assertIn("### CXSK Invoker Mutation Permission", proc.stdout)
-        self.assertIn("### CXSK Invoker Stage Guidance", proc.stdout)
+        self.assertIn("### MAMS Invoker Baseline", proc.stdout)
+        self.assertIn("### MAMS Invoker Working Style", proc.stdout)
+        self.assertIn("### MAMS Invoker Mutation Permission", proc.stdout)
+        self.assertIn("### MAMS Invoker Stage Guidance", proc.stdout)
         self.assertIn("### Shared Stage Guidance", proc.stdout)
-        self.assertIn("## Codex Reply", proc.stdout)
+        self.assertIn("## Channel Reply", proc.stdout)
 
     def test_non_init_turns_use_full_then_brief_reminder_cadence(self) -> None:
         initial_config = self.build_config(
             [
-                self.build_cxsk_channel(
+                self.build_mams_channel(
                     "default",
                     session_id="existing-session",
                     focus="Watch for architectural drift.",
@@ -539,7 +617,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
                     reminder_turn_count=1,
                 )
             ],
-            cxsk_invoker={
+            mams_invoker={
                 "baseline": "Caller baseline text.",
                 "working_style": "Caller working style.",
                 "extra_context": None,
@@ -555,19 +633,19 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         assert capture is not None
-        self.assertIn("<<<CODEX_SKILL_REMINDER_BRIEF.BEGIN>>>", capture["stdin"])
+        self.assertIn("<<<MAMS_REMINDER_BRIEF.BEGIN>>>", capture["stdin"])
         self.assertIn("<<<USER_REMINDER.BEGIN>>>", capture["stdin"])
         self.assertIn("<<<SYNC_MESSAGE.BEGIN>>>", capture["stdin"])
         self.assertIn("<<<SYNC_MESSAGE.END>>>", capture["stdin"])
-        self.assertIn("## Codex Skill Reminder (Brief)", capture["stdin"])
+        self.assertIn("## Mad Agent Mesh Reminder (Brief)", capture["stdin"])
         self.assertIn("## User Reminder", capture["stdin"])
         self.assertIn("configured User Reminder still applies in full".lower(), capture["stdin"].lower())
-        self.assertIn("### CXSK Channel Focus", capture["stdin"])
-        self.assertIn("## Codex Skill Reminder (Brief)", proc.stdout)
+        self.assertIn("### MAMS Channel Focus", capture["stdin"])
+        self.assertIn("## Mad Agent Mesh Reminder (Brief)", proc.stdout)
         self.assertIn("## User Reminder", proc.stdout)
-        self.assertIn("### CXSK Invoker Baseline", proc.stdout)
-        cxsk_channel = self.find_cxsk_channel(state, "default")
-        self.assertEqual(cxsk_channel["reminder_turn_count"], 2)
+        self.assertIn("### MAMS Invoker Baseline", proc.stdout)
+        mams_channel = self.find_mams_channel(state, "default")
+        self.assertEqual(mams_channel["reminder_turn_count"], 2)
 
     def test_review_this_work_reminder_warns_not_to_stop_after_scope_pass(self) -> None:
         proc, _capture, _state = self.run_skill(
@@ -582,8 +660,8 @@ class CodexSkillIntegrationTests(unittest.TestCase):
     def test_missing_ref_file_fails_the_call(self) -> None:
         proc, _capture, _state = self.run_skill(
             "sync",
-            '{"sync_message":"Please keep [[REF:.codex-skill/refs/missing.md::Rule 2]] in mind."}',
-            initial_cxsk_channels=[self.build_cxsk_channel("default", session_id="existing-session")],
+            '{"sync_message":"Please keep [[REF:.mad-agent-mesh/refs/missing.md::Rule 2]] in mind."}',
+            initial_mams_channels=[self.build_mams_channel("default", session_id="existing-session")],
         )
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("Referenced file does not exist", proc.stderr)
@@ -591,32 +669,32 @@ class CodexSkillIntegrationTests(unittest.TestCase):
     def test_dangerous_new_session_replaces_current_named_agent_and_records_previous_ids(self) -> None:
         proc, capture, state = self.run_skill(
             "dangerous-new-session",
-            '{"user_permission":"The user explicitly asked to abandon the old Codex continuity and start fresh."}',
+            '{"user_permission":"The user explicitly asked to abandon the old managed continuity and start fresh."}',
             "fresh managed session ready.",
-            cxsk_channel_name="reviewer-a",
-            initial_cxsk_channels=[
-                self.build_cxsk_channel("default", session_id="default-session", previous_session_ids=["older-default"]),
-                self.build_cxsk_channel("reviewer-a", session_id="old-session", previous_session_ids=["older-session", "oldest-session"]),
+            mams_channel_name="reviewer-a",
+            initial_mams_channels=[
+                self.build_mams_channel("default", session_id="default-session", previous_session_ids=["older-default"]),
+                self.build_mams_channel("reviewer-a", session_id="old-session", previous_session_ids=["older-session", "oldest-session"]),
             ],
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         assert capture is not None
         self.assertEqual(self.sandbox_from_argv(capture["argv"]), "read-only")
         self.assertNotIn("resume", capture["argv"])
-        reviewer = self.find_cxsk_channel(state, "reviewer-a")
+        reviewer = self.find_mams_channel(state, "reviewer-a")
         self.assertEqual(reviewer["session_id"], "test-session")
         self.assertEqual(reviewer["previous_session_ids"], ["old-session", "older-session"])
-        default = self.find_cxsk_channel(state, "default")
+        default = self.find_mams_channel(state, "default")
         self.assertEqual(default["session_id"], "default-session")
-        self.assertIn("Target cxsk_channel: reviewer-a", proc.stdout)
+        self.assertIn("Target mams_channel: reviewer-a", proc.stdout)
 
     def test_dangerous_new_session_can_switch_target_session_id_and_update_saved_settings(self) -> None:
         proc, capture, state = self.run_skill(
             "dangerous-new-session",
-            '{"user_permission":"The user explicitly asked to switch back to a specific prior Codex session.","target_session_id":"restored-session","cxsk_channel_description":"Reviewer A for plan gate.","model":"gpt-review","reasoning_effort":"medium"}',
-            cxsk_channel_name="reviewer-a",
-            initial_cxsk_channels=[
-                self.build_cxsk_channel(
+            '{"user_permission":"The user explicitly asked to switch back to a specific prior managed session.","target_session_id":"restored-session","mams_channel_description":"Reviewer A for plan gate.","model":"gpt-review","reasoning_effort":"medium"}',
+            mams_channel_name="reviewer-a",
+            initial_mams_channels=[
+                self.build_mams_channel(
                     "reviewer-a",
                     description="Old description",
                     session_id="current-session",
@@ -628,7 +706,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIsNone(capture)
-        reviewer = self.find_cxsk_channel(state, "reviewer-a")
+        reviewer = self.find_mams_channel(state, "reviewer-a")
         self.assertEqual(reviewer["session_id"], "restored-session")
         self.assertEqual(reviewer["description"], "Reviewer A for plan gate.")
         self.assertEqual(reviewer["model"], "gpt-review")
@@ -640,13 +718,13 @@ class CodexSkillIntegrationTests(unittest.TestCase):
             "sync",
             '{"sync_message":"Please respond to the current review feedback."}',
             "## Discussion Reply\n\nI agree with the concern.\n\n## Plan\n\nRepair the parser first.",
-            initial_cxsk_channels=[self.build_cxsk_channel("default", session_id="existing-session")],
+            initial_mams_channels=[self.build_mams_channel("default", session_id="existing-session")],
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         assert capture is not None
         self.assertEqual(self.sandbox_from_argv(capture["argv"]), "read-only")
         self.assertIn("<<<SYNC_MESSAGE.BEGIN>>>", capture["stdin"])
-        self.assertIn("Sync message from the cxsk_invoker:", capture["stdin"])
+        self.assertIn("Sync message from the mams_invoker:", capture["stdin"])
         self.assertIn("## Plan", proc.stdout)
 
     def test_execute_this_plan_defaults_to_workspace_write(self) -> None:
@@ -654,7 +732,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
             "execute-this-plan",
             '{"approved_plan":"Implement the approved parser fix and complete the approved plan."}',
             "Updated parser, ran validation, stopped for review.",
-            initial_cxsk_channels=[self.build_cxsk_channel("default", session_id="existing-session")],
+            initial_mams_channels=[self.build_mams_channel("default", session_id="existing-session")],
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         assert capture is not None
@@ -662,14 +740,14 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         self.assertIn("<<<EXECUTION_SANDBOX.BEGIN>>>", capture["stdin"])
         self.assertIn("<<<APPROVED_PLAN.BEGIN>>>", capture["stdin"])
         self.assertIn("workspace-write (default mutation sandbox)", capture["stdin"])
-        self.assertIn("Approved plan from the cxsk_invoker:", capture["stdin"])
+        self.assertIn("Approved plan from the mams_invoker:", capture["stdin"])
 
     def test_execute_this_plan_part_full_access_escalates_to_danger_full_access(self) -> None:
         proc, capture, _state = self.run_skill(
             "execute-this-plan-part",
             '{"approved_plan_part":"Run the approved large repair tranche.","sandbox_mode":"full-access"}',
             "Ran the approved repair under full access and stopped.",
-            initial_cxsk_channels=[self.build_cxsk_channel("default", session_id="existing-session")],
+            initial_mams_channels=[self.build_mams_channel("default", session_id="existing-session")],
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         assert capture is not None
@@ -677,34 +755,83 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         self.assertIn("<<<EXECUTION_SANDBOX.BEGIN>>>", capture["stdin"])
         self.assertIn("<<<APPROVED_PLAN_PART.BEGIN>>>", capture["stdin"])
         self.assertIn(
-            "danger-full-access (explicit full-access escalation approved by the cxsk_invoker)",
+            "danger-full-access (explicit full-access escalation approved by the mams_invoker)",
             capture["stdin"],
         )
-        self.assertIn("Approved plan part from the cxsk_invoker:", capture["stdin"])
+        self.assertIn("Approved plan part from the mams_invoker:", capture["stdin"])
 
-    def test_execute_this_plan_rejects_non_mutating_cxsk_channel(self) -> None:
-        proc, _capture, _state = self.run_skill(
-            "execute-this-plan",
-            '{"approved_plan":"Implement the approved parser fix and complete the approved plan."}',
-            initial_cxsk_channels=[self.build_cxsk_channel("reviewer-a", session_id="existing-session", can_mutate=False)],
-            cxsk_channel_name="reviewer-a",
+    def test_claude_code_runner_creates_session_and_uses_plan_permission_for_review(self) -> None:
+        proc, capture, state = self.run_skill(
+            "review-this-plan",
+            '{"plan_for_review":"Review the current plan."}',
+            "approved_to_mutate: true\n\n## Plan Review Reply\n\nLooks acceptable.",
+            initial_mams_channels=[
+                self.build_mams_channel("planner", runner="claude-code", can_mutate=False)
+            ],
+            mams_channel_name="planner",
         )
-        self.assertNotEqual(proc.returncode, 0)
-        self.assertIn("can_mutate: false", proc.stderr)
-        self.assertIn("mutate-capable cxsk_channel", proc.stderr)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        assert capture is not None
+        self.assertEqual(capture["runner"], "claude-code")
+        self.assertIn("--permission-mode", capture["argv"])
+        permission_mode = capture["argv"][capture["argv"].index("--permission-mode") + 1]
+        self.assertEqual(permission_mode, "plan")
+        self.assertNotIn("--resume", capture["argv"])
+        planner = self.find_mams_channel(state, "planner")
+        self.assertEqual(planner["session_id"], "claude-session")
+        self.assertEqual(planner["runner"], "claude-code")
 
-    def test_invoke_fanout_returns_settled_results_and_updates_channels(self) -> None:
+    def test_claude_code_runner_resumes_existing_session(self) -> None:
+        proc, capture, _state = self.run_skill(
+            "sync",
+            '{"sync_message":"Continue the planning discussion."}',
+            "## Discussion Reply\n\nContinue with the approved direction.",
+            initial_mams_channels=[
+                self.build_mams_channel(
+                    "planner",
+                    runner="claude-code",
+                    can_mutate=False,
+                    session_id="claude-existing-session",
+                )
+            ],
+            mams_channel_name="planner",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        assert capture is not None
+        self.assertEqual(capture["runner"], "claude-code")
+        self.assertIn("--resume", capture["argv"])
+        self.assertIn("claude-existing-session", capture["argv"])
+
+    def test_claude_code_runner_uses_accept_edits_for_execute(self) -> None:
+        proc, capture, state = self.run_skill(
+            "execute-this-plan",
+            '{"approved_plan":"Implement the approved plan."}',
+            "Implemented the approved plan and stopped for review.",
+            initial_mams_channels=[
+                self.build_mams_channel("executor", runner="claude-code", can_mutate=True)
+            ],
+            mams_channel_name="executor",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        assert capture is not None
+        self.assertEqual(capture["runner"], "claude-code")
+        permission_mode = capture["argv"][capture["argv"].index("--permission-mode") + 1]
+        self.assertEqual(permission_mode, "acceptEdits")
+        executor = self.find_mams_channel(state, "executor")
+        self.assertEqual(executor["session_id"], "claude-session")
+
+    def test_invoke_supports_mixed_codex_and_claude_code_runners(self) -> None:
         payload = json.dumps(
             {
                 "requests": [
                     {
                         "command": "review-this-plan",
-                        "cxsk_channel": "reviewer-a",
+                        "mams_channel": "reviewer-a",
                         "input": {"plan_for_review": "Plan A"},
                     },
                     {
                         "command": "review-this-plan",
-                        "cxsk_channel": "reviewer-b",
+                        "mams_channel": "reviewer-b",
                         "input": {"plan_for_review": "Plan B"},
                     },
                 ]
@@ -714,12 +841,70 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         proc, _capture, state = self.run_skill(
             "invoke",
             payload,
-            initial_cxsk_channels=[
-                self.build_cxsk_channel("reviewer-a", can_mutate=False),
-                self.build_cxsk_channel("reviewer-b", can_mutate=False),
+            initial_mams_channels=[
+                self.build_mams_channel("reviewer-a", can_mutate=False, runner="codex"),
+                self.build_mams_channel("reviewer-b", can_mutate=False, runner="claude-code"),
             ],
             env_extra={
-                "FAKE_CODEX_REPLY_MAP": json.dumps(
+                "FAKE_CHANNEL_REPLY_MAP": json.dumps(
+                    {
+                        "Plan A": "approved_to_mutate: true\n\n## Plan Review Reply\n\nReviewer A approves.",
+                        "Plan B": "approved_to_mutate: false\n\n## Plan Review Reply\n\nReviewer B blocks.",
+                    },
+                    ensure_ascii=False,
+                ),
+                "FAKE_CODEX_SESSION_MAP": json.dumps(
+                    {"Plan A": "codex-session-a", "Plan B": "claude-session-b"},
+                    ensure_ascii=False,
+                ),
+            },
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("reviewer-a · review-this-plan · ok", proc.stdout)
+        self.assertIn("reviewer-b · review-this-plan · ok", proc.stdout)
+        reviewer_a = self.find_mams_channel(state, "reviewer-a")
+        reviewer_b = self.find_mams_channel(state, "reviewer-b")
+        self.assertEqual(reviewer_a["session_id"], "codex-session-a")
+        self.assertEqual(reviewer_b["session_id"], "claude-session-b")
+
+    def test_execute_this_plan_rejects_non_mutating_mams_channel(self) -> None:
+        proc, _capture, _state = self.run_skill(
+            "execute-this-plan",
+            '{"approved_plan":"Implement the approved parser fix and complete the approved plan."}',
+            initial_mams_channels=[self.build_mams_channel("reviewer-a", session_id="existing-session", can_mutate=False)],
+            mams_channel_name="reviewer-a",
+        )
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("can_mutate: false", proc.stderr)
+        self.assertIn("mutate-capable mams_channel", proc.stderr)
+
+    def test_invoke_fanout_returns_settled_results_and_updates_channels(self) -> None:
+        payload = json.dumps(
+            {
+                "requests": [
+                    {
+                        "command": "review-this-plan",
+                        "mams_channel": "reviewer-a",
+                        "input": {"plan_for_review": "Plan A"},
+                    },
+                    {
+                        "command": "review-this-plan",
+                        "mams_channel": "reviewer-b",
+                        "input": {"plan_for_review": "Plan B"},
+                    },
+                ]
+            },
+            ensure_ascii=False,
+        )
+        proc, _capture, state = self.run_skill(
+            "invoke",
+            payload,
+            initial_mams_channels=[
+                self.build_mams_channel("reviewer-a", can_mutate=False),
+                self.build_mams_channel("reviewer-b", can_mutate=False),
+            ],
+            env_extra={
+                "FAKE_CHANNEL_REPLY_MAP": json.dumps(
                     {
                         "Plan A": "approved_to_mutate: true\n\n## Plan Review Reply\n\nReviewer A approves.",
                         "Plan B": "approved_to_mutate: false\n\n## Plan Review Reply\n\nReviewer B blocks.",
@@ -740,8 +925,8 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         self.assertIn("reviewer-b · review-this-plan · ok", proc.stdout)
         self.assertIn("Execution mode: concurrent read-only fanout", proc.stdout)
         self.assertIn("do not wrap these calls in external polling", proc.stdout)
-        reviewer_a = self.find_cxsk_channel(state, "reviewer-a")
-        reviewer_b = self.find_cxsk_channel(state, "reviewer-b")
+        reviewer_a = self.find_mams_channel(state, "reviewer-a")
+        reviewer_b = self.find_mams_channel(state, "reviewer-b")
         self.assertEqual(reviewer_a["session_id"], "session-a")
         self.assertEqual(reviewer_b["session_id"], "session-b")
         self.assertEqual(reviewer_a["reminder_turn_count"], 1)
@@ -753,12 +938,12 @@ class CodexSkillIntegrationTests(unittest.TestCase):
                 "requests": [
                     {
                         "command": "sync",
-                        "cxsk_channel": "planner",
+                        "mams_channel": "planner",
                         "input": {"sync_message": "to planner"},
                     },
                     {
                         "command": "review-this-plan",
-                        "cxsk_channel": "reviewer-a",
+                        "mams_channel": "reviewer-a",
                         "input": {"plan_for_review": "Broken Plan"},
                     },
                 ]
@@ -768,12 +953,12 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         proc, _capture, state = self.run_skill(
             "invoke",
             payload,
-            initial_cxsk_channels=[
-                self.build_cxsk_channel("planner", can_mutate=False),
-                self.build_cxsk_channel("reviewer-a", can_mutate=False),
+            initial_mams_channels=[
+                self.build_mams_channel("planner", can_mutate=False),
+                self.build_mams_channel("reviewer-a", can_mutate=False),
             ],
             env_extra={
-                "FAKE_CODEX_REPLY_MAP": json.dumps(
+                "FAKE_CHANNEL_REPLY_MAP": json.dumps(
                     {
                         "to planner": "## Discussion Reply\n\nPlanner sync succeeded.",
                     },
@@ -797,8 +982,8 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         self.assertIn("planner · sync · ok", proc.stdout)
         self.assertIn("reviewer-a · review-this-plan · error", proc.stdout)
         self.assertIn("synthetic reviewer failure", proc.stdout)
-        planner = self.find_cxsk_channel(state, "planner")
-        reviewer = self.find_cxsk_channel(state, "reviewer-a")
+        planner = self.find_mams_channel(state, "planner")
+        reviewer = self.find_mams_channel(state, "reviewer-a")
         self.assertEqual(planner["session_id"], "planner-session")
         self.assertIsNone(reviewer["session_id"])
 
@@ -808,12 +993,12 @@ class CodexSkillIntegrationTests(unittest.TestCase):
                 "requests": [
                     {
                         "command": "sync",
-                        "cxsk_channel": "planner",
+                        "mams_channel": "planner",
                         "input": {"sync_message": "first"},
                     },
                     {
                         "command": "sync",
-                        "cxsk_channel": "planner",
+                        "mams_channel": "planner",
                         "input": {"sync_message": "second"},
                     },
                 ]
@@ -822,26 +1007,26 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         )
         proc, _capture, _state = self.run_skill("invoke", payload)
         self.assertNotEqual(proc.returncode, 0)
-        self.assertIn("does not allow duplicate cxsk_channel targets", proc.stderr)
+        self.assertIn("does not allow duplicate mams_channel targets", proc.stderr)
 
     def test_missing_thread_error_requires_explicit_dangerous_reset(self) -> None:
         proc, _capture, _state = self.run_skill(
             "review-this-work",
             '{"work_for_review":"Please review the completed work."}',
-            initial_cxsk_channels=[self.build_cxsk_channel("default", session_id="stale-session")],
+            initial_mams_channels=[self.build_mams_channel("default", session_id="stale-session")],
             error="thread stale-session not found",
         )
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("could not resume", proc.stderr)
         self.assertIn("dangerous-new-session", proc.stderr)
-        self.assertIn("managed cxsk_channel 'default'", proc.stderr)
+        self.assertIn("managed mams_channel 'default'", proc.stderr)
 
     def test_review_this_plan_rejects_legacy_json_reply(self) -> None:
         proc, _capture, _state = self.run_skill(
             "review-this-plan",
             '{"plan_for_review":"Change only the prompt parser and update tests."}',
             '{"approved_to_mutate":true,"plan_review_reply":"legacy json"}',
-            initial_cxsk_channels=[self.build_cxsk_channel("default", session_id="existing-session")],
+            initial_mams_channels=[self.build_mams_channel("default", session_id="existing-session")],
         )
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("approved_to_mutate must be the first non-empty line", proc.stderr)

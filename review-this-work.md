@@ -1,6 +1,6 @@
 # review-this-work
 
-Use this after execution work has happened and before the cxsk_invoker treats that work as accepted or delivered.
+Use this after execution work has happened and before the mams_invoker treats that work as accepted or delivered.
 
 This is a hard gate.
 
@@ -19,7 +19,7 @@ Optional:
 ```json
 {
   "work_for_review": "Describe the actual work, validation, and remaining concerns here.",
-  "new_information": "Only if something changed after the work was done or after the last Codex turn.",
+  "new_information": "Only if something changed after the work was done or after the last managed-channel turn.",
   "fresh_user_message": "Only if the user actually said new words that matter for this review."
 }
 ```

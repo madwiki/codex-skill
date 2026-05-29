@@ -14,10 +14,11 @@ import time
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator, Optional, Tuple
+from typing import Callable, Iterator, Optional, Tuple
 
 
 CODEX_BIN = os.environ.get("CODEX_BIN", "codex")
+CLAUDE_BIN = os.environ.get("CLAUDE_BIN", "claude")
 CODEX_HOME = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex")))
 DEFAULT_MODEL = os.environ.get("CODEX_MODEL")
 DEFAULT_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT")
@@ -46,12 +47,12 @@ EXECUTE_SANDBOX_DEFAULT = "default"
 EXECUTE_SANDBOX_FULL_ACCESS = "full-access"
 DANGEROUS_NEW_SESSION_PERMISSION_FIELD = "user_permission"
 DANGEROUS_NEW_SESSION_TARGET_FIELD = "target_session_id"
-DANGEROUS_NEW_SESSION_CXSK_CHANNEL_DESCRIPTION_FIELD = "cxsk_channel_description"
+DANGEROUS_NEW_SESSION_MAMS_CHANNEL_DESCRIPTION_FIELD = "mams_channel_description"
 DANGEROUS_NEW_SESSION_MODEL_FIELD = "model"
 DANGEROUS_NEW_SESSION_REASONING_EFFORT_FIELD = "reasoning_effort"
-CONFIGURE_CXSK_INVOKER_FIELD = "cxsk_invoker"
+CONFIGURE_MAMS_INVOKER_FIELD = "mams_invoker"
 CONFIGURE_SHARED_STAGES_FIELD = "shared_stages"
-CONFIGURE_CXSK_CHANNELS_FIELD = "cxsk_channels"
+CONFIGURE_MAMS_CHANNELS_FIELD = "mams_channels"
 INIT_TASK_REPLY_TITLE = "Task Understanding Reply"
 INIT_RECOVERY_REPLY_TITLE = "Context Recovery Reply"
 REVIEW_PLAN_REPLY_TITLE = "Plan Review Reply"
@@ -63,16 +64,19 @@ SANDBOX_WORKSPACE_WRITE = "workspace-write"
 SANDBOX_DANGER_FULL_ACCESS = "danger-full-access"
 PROCESS_POLL_INTERVAL_S = 20
 PROCESS_IDLE_TIMEOUT_S = 600
-CXSK_CHANNELS_FILENAME = "cxsk_channels.json"
+MAMS_CHANNELS_FILENAME = "mams_channels.json"
 LEGACY_SESSION_FILENAME = "codex_session.json"
 LEGACY_HISTORY_FILENAME = "codex_session_history.json"
-MANAGED_DIRNAME = ".codex-skill"
+MANAGED_DIRNAME = ".mad-agent-mesh"
 LEGACY_MANAGED_DIRNAME = ".claude"
-DEFAULT_CXSK_CHANNEL_NAME = "default"
-DEFAULT_CXSK_CHANNEL_DESCRIPTION = "Primary managed CXSK channel."
-MIGRATED_CXSK_CHANNEL_DESCRIPTION = "Migrated primary managed CXSK channel."
+DEFAULT_MAMS_CHANNEL_NAME = "default"
+DEFAULT_MAMS_CHANNEL_DESCRIPTION = "Primary managed MAMS channel."
+MIGRATED_MAMS_CHANNEL_DESCRIPTION = "Migrated primary managed MAMS channel."
 CONFIG_VERSION = 5
 REF_DIRECTORY = f"{MANAGED_DIRNAME}/refs"
+RUNNER_CODEX = "codex"
+RUNNER_CLAUDE_CODE = "claude-code"
+SUPPORTED_RUNNERS = {RUNNER_CODEX, RUNNER_CLAUDE_CODE}
 REF_PATTERN = re.compile(r"\[\[REF:(?P<path>[^:\]]+?)(?:::(?P<locator>[^\]]+))?\]\]")
 LEGACY_STAGE_KEY_MAP = {
     "chat": "sync",
@@ -85,26 +89,26 @@ LEGACY_STAGE_KEY_MAP = {
 LEGACY_STRUCTURED_FILENAMES = (
     "codex_agents.json",
     "codex_channels.json",
-    "cxsk_channels.json",
+    "mams_channels.json",
 )
 
 TOOL_HELP = {
-    "init": "Bootstrap Codex collaboration for a new task or recovery sync (reads JSON from stdin).",
-    "invoke": "Invoke one or more cxsk_channel commands through one blocking wrapper call (reads JSON from stdin).",
+    "init": "Bootstrap managed-channel collaboration for a new task or recovery sync (reads JSON from stdin).",
+    "invoke": "Invoke one or more mams_channel commands through one blocking wrapper call (reads JSON from stdin).",
     "sync": "Discussion / coordination / disagreement-resolution turn (reads JSON from stdin).",
-    "review-this-plan": "Codex reviews the submitted plan without mutating state (reads JSON from stdin).",
-    "review-this-work": "Codex reviews submitted work without mutating state (reads JSON from stdin).",
-    "execute-this-plan": "Codex executes one approved plan when this cxsk_channel is allowed to mutate (reads JSON from stdin).",
-    "execute-this-plan-part": "Codex executes one approved plan part when this cxsk_channel is allowed to mutate (reads JSON from stdin).",
-    "dangerous-new-session": "Explicitly authorize discarding continuity and starting or switching a managed Codex cxsk_channel session (reads JSON from stdin).",
-    "configure": "Patch cxsk_invoker guidance, shared guidance, or cxsk_channel metadata (reads JSON from stdin).",
+    "review-this-plan": "Review the submitted plan on the targeted managed channel without mutating state (reads JSON from stdin).",
+    "review-this-work": "Review submitted work on the targeted managed channel without mutating state (reads JSON from stdin).",
+    "execute-this-plan": "Execute one approved plan on a mutate-capable managed channel (reads JSON from stdin).",
+    "execute-this-plan-part": "Execute one approved plan part on a mutate-capable managed channel (reads JSON from stdin).",
+    "dangerous-new-session": "Explicitly authorize discarding continuity and starting or switching a managed MAMS mams_channel session (reads JSON from stdin).",
+    "configure": "Patch mams_invoker guidance, shared guidance, or mams_channel metadata (reads JSON from stdin).",
     "update-config": "Normalize discoverable managed state and rewrite the canonical config (does not read JSON from stdin).",
 }
 
 INVOKE_REQUESTS_FIELD = "requests"
 INVOKE_COMMAND_FIELD = "command"
 INVOKE_INPUT_FIELD = "input"
-INVOKE_CXSK_CHANNEL_FIELD = "cxsk_channel"
+INVOKE_MAMS_CHANNEL_FIELD = "mams_channel"
 INVOKE_ALLOWED_COMMANDS = {
     "init",
     "sync",
@@ -143,15 +147,15 @@ def iter_ancestors(start: Path) -> Iterator[Path]:
 
 def find_session_root(start: Path) -> Optional[Path]:
     """
-    Find the nearest ancestor directory that already owns a managed Codex session
+    Find the nearest ancestor directory that already owns a managed MAMS session
     file.
 
     IMPORTANT:
-    - Never treat the global ~/.claude or ~/.codex-skill directory as a project root.
-    - `.codex-skill/cxsk_channels.json` is the stable anchor.
+    - Never treat the global ~/.claude or ~/.mad-agent-mesh directory as a project root.
+    - `.mad-agent-mesh/mams_channels.json` is the stable anchor.
     - Legacy structured config filenames and `.claude/codex_session.json` are accepted only as migration anchors so the wrapper can
       migrate them into the new structured config location.
-    - `.codex-skill/` or `.claude/` alone can exist at many levels for other purposes, so we do
+    - `.mad-agent-mesh/` or `.claude/` alone can exist at many levels for other purposes, so we do
       not auto-pick based on the directory alone.
     """
     for p in iter_ancestors(start):
@@ -182,14 +186,14 @@ def candidate_roots_with_managed_dir(start: Path, limit: int = 5) -> list[Path]:
     return candidates
 
 
-def cxsk_channels_file_path(repo_root: Path) -> Path:
-    return repo_root / MANAGED_DIRNAME / CXSK_CHANNELS_FILENAME
+def mams_channels_file_path(repo_root: Path) -> Path:
+    return repo_root / MANAGED_DIRNAME / MAMS_CHANNELS_FILENAME
 
 
 def iter_legacy_structured_config_paths(repo_root: Path) -> Iterator[Path]:
     for filename in LEGACY_STRUCTURED_FILENAMES:
         managed_path = repo_root / MANAGED_DIRNAME / filename
-        if managed_path.name != CXSK_CHANNELS_FILENAME:
+        if managed_path.name != MAMS_CHANNELS_FILENAME:
             yield managed_path
         yield repo_root / LEGACY_MANAGED_DIRNAME / filename
 
@@ -212,7 +216,7 @@ def iso_now() -> str:
 
 
 @dataclass(frozen=True)
-class CxskChannelConfig:
+class MamsChannelConfig:
     name: str
     description: str
     focus: Optional[str]
@@ -220,6 +224,8 @@ class CxskChannelConfig:
     extra_context: Optional[str]
     stage_guidance: dict[str, str]
     can_mutate: bool
+    runner: str
+    runner_config: dict[str, object]
     session_id: Optional[str]
     model: Optional[str]
     reasoning_effort: Optional[str]
@@ -229,7 +235,7 @@ class CxskChannelConfig:
 
 
 @dataclass(frozen=True)
-class CxskInvokerConfig:
+class MamsInvokerConfig:
     baseline: Optional[str]
     working_style: Optional[str]
     extra_context: Optional[str]
@@ -238,11 +244,11 @@ class CxskInvokerConfig:
 
 
 @dataclass(frozen=True)
-class CxskSkillConfig:
+class MamsSkillConfig:
     version: int
-    cxsk_invoker: CxskInvokerConfig
+    mams_invoker: MamsInvokerConfig
     shared_stages: dict[str, str]
-    cxsk_channels: list[CxskChannelConfig]
+    mams_channels: list[MamsChannelConfig]
     updated_at: str
 
 
@@ -296,13 +302,30 @@ def normalize_stage_guidance_map(value: object, *, field_name: str) -> dict[str,
     return normalized
 
 
-def default_cxsk_channel_description(name: str) -> str:
-    if name == DEFAULT_CXSK_CHANNEL_NAME:
-        return DEFAULT_CXSK_CHANNEL_DESCRIPTION
-    return f"Managed CXSK channel '{name}'."
+def normalize_runner(value: object, *, field_name: str) -> str:
+    runner = normalize_optional_string(value) or RUNNER_CODEX
+    if runner not in SUPPORTED_RUNNERS:
+        raise ValueError(
+            f"{field_name} must be one of: {', '.join(sorted(SUPPORTED_RUNNERS))}."
+        )
+    return runner
 
 
-def build_cxsk_channel_config(
+def normalize_runner_config(value: object, *, field_name: str) -> dict[str, object]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{field_name} must be a JSON object when provided.")
+    return dict(value)
+
+
+def default_mams_channel_description(name: str) -> str:
+    if name == DEFAULT_MAMS_CHANNEL_NAME:
+        return DEFAULT_MAMS_CHANNEL_DESCRIPTION
+    return f"Managed MAMS channel '{name}'."
+
+
+def build_mams_channel_config(
     name: str,
     *,
     description: Optional[str] = None,
@@ -311,19 +334,21 @@ def build_cxsk_channel_config(
     extra_context: Optional[str] = None,
     stage_guidance: Optional[dict[str, str]] = None,
     can_mutate: bool = True,
+    runner: str = RUNNER_CODEX,
+    runner_config: Optional[dict[str, object]] = None,
     session_id: Optional[str] = None,
     model: Optional[str] = None,
     reasoning_effort: Optional[str] = None,
     previous_session_ids: tuple[str, ...] = (),
     reminder_turn_count: int = 0,
-) -> CxskChannelConfig:
+) -> MamsChannelConfig:
     normalized_name = normalize_optional_string(name)
     if not normalized_name:
-        raise ValueError("CXSK channel name must be a non-empty string.")
-    normalized_description = normalize_optional_string(description) or default_cxsk_channel_description(
+        raise ValueError("MAMS channel name must be a non-empty string.")
+    normalized_description = normalize_optional_string(description) or default_mams_channel_description(
         normalized_name
     )
-    return CxskChannelConfig(
+    return MamsChannelConfig(
         name=normalized_name,
         description=normalized_description,
         focus=normalize_optional_string(focus),
@@ -331,6 +356,8 @@ def build_cxsk_channel_config(
         extra_context=normalize_optional_string(extra_context),
         stage_guidance=dict(stage_guidance or {}),
         can_mutate=bool(can_mutate),
+        runner=normalize_runner(runner, field_name=f"mams_channels[{normalized_name}].runner"),
+        runner_config=normalize_runner_config(runner_config, field_name=f"mams_channels[{normalized_name}].runner_config"),
         session_id=normalize_optional_string(session_id),
         model=normalize_optional_string(model),
         reasoning_effort=normalize_optional_string(reasoning_effort),
@@ -340,25 +367,27 @@ def build_cxsk_channel_config(
     )
 
 
-def parse_cxsk_channel_config(obj: object) -> CxskChannelConfig:
+def parse_mams_channel_config(obj: object) -> MamsChannelConfig:
     if not isinstance(obj, dict):
-        raise ValueError("Each cxsk_channel entry must be a JSON object.")
+        raise ValueError("Each mams_channel entry must be a JSON object.")
     name = normalize_optional_string(obj.get("name"))
     if not name:
-        raise ValueError("Each cxsk_channel entry requires a non-empty string field: name.")
-    description = normalize_optional_string(obj.get("description")) or default_cxsk_channel_description(name)
+        raise ValueError("Each mams_channel entry requires a non-empty string field: name.")
+    description = normalize_optional_string(obj.get("description")) or default_mams_channel_description(name)
     updated_at = normalize_optional_string(obj.get("updated_at")) or iso_now()
     raw_can_mutate = obj.get("can_mutate", True)
     if not isinstance(raw_can_mutate, bool):
-        raise ValueError(f"cxsk_channels[{name}].can_mutate must be a boolean when provided.")
-    return CxskChannelConfig(
+        raise ValueError(f"mams_channels[{name}].can_mutate must be a boolean when provided.")
+    return MamsChannelConfig(
         name=name,
         description=description,
         focus=normalize_optional_string(obj.get("focus")),
         baseline=normalize_optional_string(obj.get("baseline")),
         extra_context=normalize_optional_string(obj.get("extra_context")),
-        stage_guidance=normalize_stage_guidance_map(obj.get("stage_guidance"), field_name=f"cxsk_channels[{name}].stage_guidance"),
+        stage_guidance=normalize_stage_guidance_map(obj.get("stage_guidance"), field_name=f"mams_channels[{name}].stage_guidance"),
         can_mutate=raw_can_mutate,
+        runner=normalize_runner(obj.get("runner"), field_name=f"mams_channels[{name}].runner"),
+        runner_config=normalize_runner_config(obj.get("runner_config"), field_name=f"mams_channels[{name}].runner_config"),
         session_id=normalize_optional_string(obj.get("session_id")),
         model=normalize_optional_string(obj.get("model")),
         reasoning_effort=normalize_optional_string(obj.get("reasoning_effort")),
@@ -368,26 +397,28 @@ def parse_cxsk_channel_config(obj: object) -> CxskChannelConfig:
     )
 
 
-def cxsk_channel_config_to_json(cxsk_channel: CxskChannelConfig) -> dict[str, object]:
+def mams_channel_config_to_json(mams_channel: MamsChannelConfig) -> dict[str, object]:
     return {
-        "name": cxsk_channel.name,
-        "description": cxsk_channel.description,
-        "focus": cxsk_channel.focus,
-        "baseline": cxsk_channel.baseline,
-        "extra_context": cxsk_channel.extra_context,
-        "stage_guidance": cxsk_channel.stage_guidance,
-        "can_mutate": cxsk_channel.can_mutate,
-        "session_id": cxsk_channel.session_id,
-        "model": cxsk_channel.model,
-        "reasoning_effort": cxsk_channel.reasoning_effort,
-        "previous_session_ids": list(cxsk_channel.previous_session_ids),
-        "reminder_turn_count": cxsk_channel.reminder_turn_count,
-        "updated_at": cxsk_channel.updated_at,
+        "name": mams_channel.name,
+        "description": mams_channel.description,
+        "focus": mams_channel.focus,
+        "baseline": mams_channel.baseline,
+        "extra_context": mams_channel.extra_context,
+        "stage_guidance": mams_channel.stage_guidance,
+        "can_mutate": mams_channel.can_mutate,
+        "runner": mams_channel.runner,
+        "runner_config": mams_channel.runner_config,
+        "session_id": mams_channel.session_id,
+        "model": mams_channel.model,
+        "reasoning_effort": mams_channel.reasoning_effort,
+        "previous_session_ids": list(mams_channel.previous_session_ids),
+        "reminder_turn_count": mams_channel.reminder_turn_count,
+        "updated_at": mams_channel.updated_at,
     }
 
 
-def default_cxsk_invoker_config() -> CxskInvokerConfig:
-    return CxskInvokerConfig(
+def default_mams_invoker_config() -> MamsInvokerConfig:
+    return MamsInvokerConfig(
         baseline=None,
         working_style=None,
         extra_context=None,
@@ -396,34 +427,34 @@ def default_cxsk_invoker_config() -> CxskInvokerConfig:
     )
 
 
-def default_cxsk_skill_config(cxsk_channels: Optional[list[CxskChannelConfig]] = None) -> CxskSkillConfig:
-    return CxskSkillConfig(
+def default_mams_skill_config(mams_channels: Optional[list[MamsChannelConfig]] = None) -> MamsSkillConfig:
+    return MamsSkillConfig(
         version=CONFIG_VERSION,
-        cxsk_invoker=default_cxsk_invoker_config(),
+        mams_invoker=default_mams_invoker_config(),
         shared_stages={},
-        cxsk_channels=list(cxsk_channels or []),
+        mams_channels=list(mams_channels or []),
         updated_at=iso_now(),
     )
 
 
-def parse_cxsk_invoker_config(obj: object) -> CxskInvokerConfig:
+def parse_mams_invoker_config(obj: object) -> MamsInvokerConfig:
     if obj is None:
-        return default_cxsk_invoker_config()
+        return default_mams_invoker_config()
     if not isinstance(obj, dict):
-        raise ValueError("cxsk_invoker must be a JSON object when provided.")
+        raise ValueError("mams_invoker must be a JSON object when provided.")
     raw_can_mutate = obj.get("can_mutate", True)
     if not isinstance(raw_can_mutate, bool):
-        raise ValueError("cxsk_invoker.can_mutate must be a boolean when provided.")
-    return CxskInvokerConfig(
+        raise ValueError("mams_invoker.can_mutate must be a boolean when provided.")
+    return MamsInvokerConfig(
         baseline=normalize_optional_string(obj.get("baseline")),
         working_style=normalize_optional_string(obj.get("working_style")),
         extra_context=normalize_optional_string(obj.get("extra_context")),
-        stage_guidance=normalize_stage_guidance_map(obj.get("stage_guidance"), field_name="cxsk_invoker.stage_guidance"),
+        stage_guidance=normalize_stage_guidance_map(obj.get("stage_guidance"), field_name="mams_invoker.stage_guidance"),
         can_mutate=raw_can_mutate,
     )
 
 
-def cxsk_invoker_config_to_json(config: CxskInvokerConfig) -> dict[str, object]:
+def mams_invoker_config_to_json(config: MamsInvokerConfig) -> dict[str, object]:
     return {
         "baseline": config.baseline,
         "working_style": config.working_style,
@@ -433,26 +464,26 @@ def cxsk_invoker_config_to_json(config: CxskInvokerConfig) -> dict[str, object]:
     }
 
 
-def parse_skill_config_object(obj: object, *, path: Path) -> CxskSkillConfig:
+def parse_skill_config_object(obj: object, *, path: Path) -> MamsSkillConfig:
     if not isinstance(obj, dict):
-        raise RuntimeError(f"CXSK channel config file must contain a JSON object or legacy JSON array: {path}")
-    cxsk_channels_value = obj.get("cxsk_channels", obj.get("channels", obj.get("agents")))
-    if cxsk_channels_value is None:
-        raise RuntimeError(f"Config object must contain a 'cxsk_channels' array: {path}")
-    if not isinstance(cxsk_channels_value, list):
-        raise RuntimeError(f"Config field 'cxsk_channels' must be a JSON array: {path}")
-    cxsk_channels: list[CxskChannelConfig] = []
+        raise RuntimeError(f"MAMS channel config file must contain a JSON object or legacy JSON array: {path}")
+    mams_channels_value = obj.get("mams_channels", obj.get("channels", obj.get("agents")))
+    if mams_channels_value is None:
+        raise RuntimeError(f"Config object must contain a 'mams_channels' array: {path}")
+    if not isinstance(mams_channels_value, list):
+        raise RuntimeError(f"Config field 'mams_channels' must be a JSON array: {path}")
+    mams_channels: list[MamsChannelConfig] = []
     seen: set[str] = set()
-    for raw in cxsk_channels_value:
-        cxsk_channel = parse_cxsk_channel_config(raw)
-        if cxsk_channel.name in seen:
-            raise RuntimeError(f"Duplicate cxsk_channel name in {path}: {cxsk_channel.name}")
-        seen.add(cxsk_channel.name)
-        cxsk_channels.append(cxsk_channel)
+    for raw in mams_channels_value:
+        mams_channel = parse_mams_channel_config(raw)
+        if mams_channel.name in seen:
+            raise RuntimeError(f"Duplicate mams_channel name in {path}: {mams_channel.name}")
+        seen.add(mams_channel.name)
+        mams_channels.append(mams_channel)
     try:
         shared_stages = normalize_stage_guidance_map(obj.get("shared_stages"), field_name="shared_stages")
-        cxsk_invoker_source = obj.get("cxsk_invoker", obj.get("invoker", obj.get("caller", obj.get("claude"))))
-        cxsk_invoker = parse_cxsk_invoker_config(cxsk_invoker_source)
+        mams_invoker_source = obj.get("mams_invoker", obj.get("invoker", obj.get("caller", obj.get("claude"))))
+        mams_invoker = parse_mams_invoker_config(mams_invoker_source)
     except ValueError as exc:
         raise RuntimeError(str(exc)) from exc
     version = obj.get("version")
@@ -461,48 +492,48 @@ def parse_skill_config_object(obj: object, *, path: Path) -> CxskSkillConfig:
     else:
         normalized_version = CONFIG_VERSION
     updated_at = normalize_optional_string(obj.get("updated_at")) or iso_now()
-    return CxskSkillConfig(
+    return MamsSkillConfig(
         version=normalized_version,
-        cxsk_invoker=cxsk_invoker,
+        mams_invoker=mams_invoker,
         shared_stages=shared_stages,
-        cxsk_channels=cxsk_channels,
+        mams_channels=mams_channels,
         updated_at=updated_at,
     )
 
 
-def skill_config_to_json(config: CxskSkillConfig) -> dict[str, object]:
+def skill_config_to_json(config: MamsSkillConfig) -> dict[str, object]:
     return {
         "version": config.version,
-        "cxsk_invoker": cxsk_invoker_config_to_json(config.cxsk_invoker),
+        "mams_invoker": mams_invoker_config_to_json(config.mams_invoker),
         "shared_stages": config.shared_stages,
-        "cxsk_channels": [cxsk_channel_config_to_json(cxsk_channel) for cxsk_channel in config.cxsk_channels],
+        "mams_channels": [mams_channel_config_to_json(mams_channel) for mams_channel in config.mams_channels],
         "updated_at": config.updated_at,
     }
 
 
-def read_skill_config(repo_root: Path) -> CxskSkillConfig:
-    path = cxsk_channels_file_path(repo_root)
+def read_skill_config(repo_root: Path) -> MamsSkillConfig:
+    path = mams_channels_file_path(repo_root)
     if not path.exists():
-        return default_cxsk_skill_config()
+        return default_mams_skill_config()
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Invalid cxsk_channel config JSON in {path}: {exc.msg}") from exc
+        raise RuntimeError(f"Invalid mams_channel config JSON in {path}: {exc.msg}") from exc
     if isinstance(data, list):
-        cxsk_channels = []
+        mams_channels = []
         seen: set[str] = set()
         for raw in data:
-            cxsk_channel = parse_cxsk_channel_config(raw)
-            if cxsk_channel.name in seen:
-                raise RuntimeError(f"Duplicate cxsk_channel name in {path}: {cxsk_channel.name}")
-            seen.add(cxsk_channel.name)
-            cxsk_channels.append(cxsk_channel)
-        return default_cxsk_skill_config(cxsk_channels)
+            mams_channel = parse_mams_channel_config(raw)
+            if mams_channel.name in seen:
+                raise RuntimeError(f"Duplicate mams_channel name in {path}: {mams_channel.name}")
+            seen.add(mams_channel.name)
+            mams_channels.append(mams_channel)
+        return default_mams_skill_config(mams_channels)
     return parse_skill_config_object(data, path=path)
 
 
-def write_skill_config(repo_root: Path, config: CxskSkillConfig) -> None:
-    path = cxsk_channels_file_path(repo_root)
+def write_skill_config(repo_root: Path, config: MamsSkillConfig) -> None:
+    path = mams_channels_file_path(repo_root)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = skill_config_to_json(config)
     tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
@@ -538,7 +569,7 @@ def read_legacy_session_history(repo_root: Path) -> tuple[str, ...]:
 class MigrationSource:
     kind: str
     path: Optional[Path]
-    config: CxskSkillConfig
+    config: MamsSkillConfig
     detail: str
 
 
@@ -550,13 +581,13 @@ def structured_config_needs_migration(raw_obj: dict[str, object]) -> bool:
         return True
     if "work_modes" in raw_obj:
         return True
-    cxsk_invoker = raw_obj.get("cxsk_invoker")
-    if not isinstance(cxsk_invoker, dict) or "can_mutate" not in cxsk_invoker:
+    mams_invoker = raw_obj.get("mams_invoker")
+    if not isinstance(mams_invoker, dict) or "can_mutate" not in mams_invoker:
         return True
-    cxsk_channels = raw_obj.get("cxsk_channels")
-    if isinstance(cxsk_channels, list):
-        for raw_cxsk_channel in cxsk_channels:
-            if not isinstance(raw_cxsk_channel, dict) or "can_mutate" not in raw_cxsk_channel:
+    mams_channels = raw_obj.get("mams_channels")
+    if isinstance(mams_channels, list):
+        for raw_mams_channel in mams_channels:
+            if not isinstance(raw_mams_channel, dict) or "can_mutate" not in raw_mams_channel:
                 return True
         return False
     return False
@@ -568,13 +599,13 @@ def load_migration_source(
     default_model: Optional[str],
     default_reasoning_effort: Optional[str],
 ) -> Optional[MigrationSource]:
-    config_path = cxsk_channels_file_path(repo_root)
+    config_path = mams_channels_file_path(repo_root)
 
     if config_path.exists():
         try:
             data = json.loads(config_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
-            raise RuntimeError(f"Invalid cxsk_channel config JSON in {config_path}: {exc.msg}") from exc
+            raise RuntimeError(f"Invalid mams_channel config JSON in {config_path}: {exc.msg}") from exc
         if isinstance(data, dict):
             if not structured_config_needs_migration(data):
                 return None
@@ -588,10 +619,10 @@ def load_migration_source(
             return MigrationSource(
                 kind="current-array",
                 path=config_path,
-                config=default_cxsk_skill_config([parse_cxsk_channel_config(item) for item in data]),
+                config=default_mams_skill_config([parse_mams_channel_config(item) for item in data]),
                 detail="legacy array-based config needed normalization",
             )
-        raise RuntimeError(f"CXSK channel config file must contain a JSON object or legacy JSON array: {config_path}")
+        raise RuntimeError(f"MAMS channel config file must contain a JSON object or legacy JSON array: {config_path}")
 
     for legacy_config_path in iter_legacy_structured_config_paths(repo_root):
         if not legacy_config_path.exists():
@@ -599,7 +630,7 @@ def load_migration_source(
         try:
             data = json.loads(legacy_config_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
-            raise RuntimeError(f"Invalid cxsk_channel config JSON in {legacy_config_path}: {exc.msg}") from exc
+            raise RuntimeError(f"Invalid mams_channel config JSON in {legacy_config_path}: {exc.msg}") from exc
         if isinstance(data, dict):
             return MigrationSource(
                 kind="legacy-structured",
@@ -611,19 +642,19 @@ def load_migration_source(
             return MigrationSource(
                 kind="legacy-array",
                 path=legacy_config_path,
-                config=default_cxsk_skill_config([parse_cxsk_channel_config(item) for item in data]),
+                config=default_mams_skill_config([parse_mams_channel_config(item) for item in data]),
                 detail="legacy array-based config from the old directory",
             )
-        raise RuntimeError(f"CXSK channel config file must contain a JSON object or legacy JSON array: {legacy_config_path}")
+        raise RuntimeError(f"MAMS channel config file must contain a JSON object or legacy JSON array: {legacy_config_path}")
 
     legacy_session_id = read_legacy_session_id(repo_root)
     legacy_history = read_legacy_session_history(repo_root)
     if legacy_session_id is None and not legacy_history:
         return None
 
-    migrated = build_cxsk_channel_config(
-        DEFAULT_CXSK_CHANNEL_NAME,
-        description=MIGRATED_CXSK_CHANNEL_DESCRIPTION,
+    migrated = build_mams_channel_config(
+        DEFAULT_MAMS_CHANNEL_NAME,
+        description=MIGRATED_MAMS_CHANNEL_DESCRIPTION,
         session_id=legacy_session_id,
         model=default_model,
         reasoning_effort=default_reasoning_effort,
@@ -632,12 +663,12 @@ def load_migration_source(
     return MigrationSource(
         kind="legacy-session",
         path=legacy_session_file_path(repo_root),
-        config=default_cxsk_skill_config([migrated]),
+        config=default_mams_skill_config([migrated]),
         detail="legacy single-session continuity files",
     )
 
 
-def migrate_cxsk_channels_config_to_latest(
+def migrate_mams_channels_config_to_latest(
     repo_root: Path,
     *,
     default_model: Optional[str],
@@ -651,7 +682,7 @@ def migrate_cxsk_channels_config_to_latest(
     if source is None:
         return None
     write_skill_config(repo_root, source.config)
-    destination = cxsk_channels_file_path(repo_root)
+    destination = mams_channels_file_path(repo_root)
     if source.kind == "legacy-session":
         return (
             "Legacy session continuity files were read, normalized, and rewritten into the canonical config at "
@@ -668,28 +699,28 @@ def migrate_cxsk_channels_config_to_latest(
     )
 
 
-def find_cxsk_channel(cxsk_channels: list[CxskChannelConfig], name: str) -> Optional[CxskChannelConfig]:
-    for cxsk_channel in cxsk_channels:
-        if cxsk_channel.name == name:
-            return cxsk_channel
+def find_mams_channel(mams_channels: list[MamsChannelConfig], name: str) -> Optional[MamsChannelConfig]:
+    for mams_channel in mams_channels:
+        if mams_channel.name == name:
+            return mams_channel
     return None
 
 
-def upsert_cxsk_channel(
-    cxsk_channels: list[CxskChannelConfig],
-    updated_cxsk_channel: CxskChannelConfig,
-) -> list[CxskChannelConfig]:
-    next_cxsk_channels: list[CxskChannelConfig] = []
+def upsert_mams_channel(
+    mams_channels: list[MamsChannelConfig],
+    updated_mams_channel: MamsChannelConfig,
+) -> list[MamsChannelConfig]:
+    next_mams_channels: list[MamsChannelConfig] = []
     replaced_existing = False
-    for cxsk_channel in cxsk_channels:
-        if cxsk_channel.name == updated_cxsk_channel.name:
-            next_cxsk_channels.append(updated_cxsk_channel)
+    for mams_channel in mams_channels:
+        if mams_channel.name == updated_mams_channel.name:
+            next_mams_channels.append(updated_mams_channel)
             replaced_existing = True
         else:
-            next_cxsk_channels.append(cxsk_channel)
+            next_mams_channels.append(mams_channel)
     if not replaced_existing:
-        next_cxsk_channels.append(updated_cxsk_channel)
-    return next_cxsk_channels
+        next_mams_channels.append(updated_mams_channel)
+    return next_mams_channels
 
 
 def merge_string_map(
@@ -708,32 +739,32 @@ def merge_string_map(
 
 
 def apply_configure_payload(
-    config: CxskSkillConfig,
+    config: MamsSkillConfig,
     payload: ConfigurePayload,
-) -> CxskSkillConfig:
-    cxsk_invoker = config.cxsk_invoker
-    if payload.cxsk_invoker_patch is not None:
-        stage_patch = payload.cxsk_invoker_patch.get("stage_guidance")
-        cxsk_invoker = CxskInvokerConfig(
-            baseline=payload.cxsk_invoker_patch["baseline"] if "baseline" in payload.cxsk_invoker_patch else cxsk_invoker.baseline,
-            working_style=payload.cxsk_invoker_patch["working_style"] if "working_style" in payload.cxsk_invoker_patch else cxsk_invoker.working_style,
-            extra_context=payload.cxsk_invoker_patch["extra_context"] if "extra_context" in payload.cxsk_invoker_patch else cxsk_invoker.extra_context,
+) -> MamsSkillConfig:
+    mams_invoker = config.mams_invoker
+    if payload.mams_invoker_patch is not None:
+        stage_patch = payload.mams_invoker_patch.get("stage_guidance")
+        mams_invoker = MamsInvokerConfig(
+            baseline=payload.mams_invoker_patch["baseline"] if "baseline" in payload.mams_invoker_patch else mams_invoker.baseline,
+            working_style=payload.mams_invoker_patch["working_style"] if "working_style" in payload.mams_invoker_patch else mams_invoker.working_style,
+            extra_context=payload.mams_invoker_patch["extra_context"] if "extra_context" in payload.mams_invoker_patch else mams_invoker.extra_context,
             stage_guidance=merge_string_map(
-                cxsk_invoker.stage_guidance,
+                mams_invoker.stage_guidance,
                 stage_patch if isinstance(stage_patch, dict) else None,
             ),
-            can_mutate=payload.cxsk_invoker_patch["can_mutate"] if "can_mutate" in payload.cxsk_invoker_patch else cxsk_invoker.can_mutate,
+            can_mutate=payload.mams_invoker_patch["can_mutate"] if "can_mutate" in payload.mams_invoker_patch else mams_invoker.can_mutate,
         )
 
     shared_stages = merge_string_map(config.shared_stages, payload.shared_stages_patch)
 
-    cxsk_channels = list(config.cxsk_channels)
-    if payload.cxsk_channels_patch:
-        for patch in payload.cxsk_channels_patch:
+    mams_channels = list(config.mams_channels)
+    if payload.mams_channels_patch:
+        for patch in payload.mams_channels_patch:
             name = patch["name"]
-            existing = find_cxsk_channel(cxsk_channels, name)
+            existing = find_mams_channel(mams_channels, name)
             if existing is None:
-                updated_cxsk_channel = build_cxsk_channel_config(
+                updated_mams_channel = build_mams_channel_config(
                     name,
                     description=patch.get("description"),
                     focus=patch.get("focus"),
@@ -745,7 +776,7 @@ def apply_configure_payload(
                     reasoning_effort=patch.get("reasoning_effort"),
                 )
             else:
-                updated_cxsk_channel = build_cxsk_channel_config(
+                updated_mams_channel = build_mams_channel_config(
                     name,
                     description=patch.get("description") if "description" in patch else existing.description,
                     focus=patch.get("focus") if "focus" in patch else existing.focus,
@@ -761,13 +792,13 @@ def apply_configure_payload(
                     reasoning_effort=patch.get("reasoning_effort") if "reasoning_effort" in patch else existing.reasoning_effort,
                     previous_session_ids=existing.previous_session_ids,
                 )
-            cxsk_channels = upsert_cxsk_channel(cxsk_channels, updated_cxsk_channel)
+            mams_channels = upsert_mams_channel(mams_channels, updated_mams_channel)
 
-    return CxskSkillConfig(
+    return MamsSkillConfig(
         version=CONFIG_VERSION,
-        cxsk_invoker=cxsk_invoker,
+        mams_invoker=mams_invoker,
         shared_stages=shared_stages,
-        cxsk_channels=cxsk_channels,
+        mams_channels=mams_channels,
         updated_at=iso_now(),
     )
 
@@ -809,22 +840,22 @@ class ExecutePayload:
 class DangerousNewSessionPayload:
     user_permission: str
     target_session_id: Optional[str]
-    cxsk_channel_description: Optional[str]
+    mams_channel_description: Optional[str]
     model: Optional[str]
     reasoning_effort: Optional[str]
 
 
 @dataclass(frozen=True)
 class ConfigurePayload:
-    cxsk_invoker_patch: Optional[dict[str, object]]
+    mams_invoker_patch: Optional[dict[str, object]]
     shared_stages_patch: Optional[dict[str, Optional[str]]]
-    cxsk_channels_patch: Optional[list[dict[str, object]]]
+    mams_channels_patch: Optional[list[dict[str, object]]]
 
 
 @dataclass(frozen=True)
 class InvokeRequest:
     command: str
-    cxsk_channel_name: Optional[str]
+    mams_channel_name: Optional[str]
     stdin_text: str
 
 
@@ -856,7 +887,7 @@ def parse_invoke_request_object(raw: object, *, index: int) -> InvokeRequest:
 
     return InvokeRequest(
         command=command,
-        cxsk_channel_name=normalize_optional_string(raw.get(INVOKE_CXSK_CHANNEL_FIELD)),
+        mams_channel_name=normalize_optional_string(raw.get(INVOKE_MAMS_CHANNEL_FIELD)),
         stdin_text=json.dumps(payload, ensure_ascii=False),
     )
 
@@ -1113,7 +1144,7 @@ def parse_dangerous_new_session_payload(stdin_text: str) -> DangerousNewSessionP
     allowed_keys = {
         DANGEROUS_NEW_SESSION_PERMISSION_FIELD,
         DANGEROUS_NEW_SESSION_TARGET_FIELD,
-        DANGEROUS_NEW_SESSION_CXSK_CHANNEL_DESCRIPTION_FIELD,
+        DANGEROUS_NEW_SESSION_MAMS_CHANNEL_DESCRIPTION_FIELD,
         DANGEROUS_NEW_SESSION_MODEL_FIELD,
         DANGEROUS_NEW_SESSION_REASONING_EFFORT_FIELD,
     }
@@ -1151,8 +1182,8 @@ def parse_dangerous_new_session_payload(stdin_text: str) -> DangerousNewSessionP
     return DangerousNewSessionPayload(
         user_permission=user_permission.strip(),
         target_session_id=target_session_id,
-        cxsk_channel_description=parse_optional_config_string(
-            DANGEROUS_NEW_SESSION_CXSK_CHANNEL_DESCRIPTION_FIELD
+        mams_channel_description=parse_optional_config_string(
+            DANGEROUS_NEW_SESSION_MAMS_CHANNEL_DESCRIPTION_FIELD
         ),
         model=parse_optional_config_string(DANGEROUS_NEW_SESSION_MODEL_FIELD),
         reasoning_effort=parse_optional_config_string(DANGEROUS_NEW_SESSION_REASONING_EFFORT_FIELD),
@@ -1180,7 +1211,7 @@ def parse_configure_payload(stdin_text: str) -> ConfigurePayload:
     text = stdin_text.replace("\r\n", "\n").replace("\r", "\n").strip()
     if not text:
         raise ValueError(
-            "configure input is empty. Provide JSON with at least one of: cxsk_invoker, shared_stages, cxsk_channels."
+            "configure input is empty. Provide JSON with at least one of: mams_invoker, shared_stages, mams_channels."
         )
     try:
         obj = json.loads(text)
@@ -1190,44 +1221,44 @@ def parse_configure_payload(stdin_text: str) -> ConfigurePayload:
         raise ValueError("configure input must be a JSON object.")
 
     allowed_keys = {
-        CONFIGURE_CXSK_INVOKER_FIELD,
+        CONFIGURE_MAMS_INVOKER_FIELD,
         CONFIGURE_SHARED_STAGES_FIELD,
-        CONFIGURE_CXSK_CHANNELS_FIELD,
+        CONFIGURE_MAMS_CHANNELS_FIELD,
     }
     unknown_keys = set(obj.keys()) - allowed_keys
     if unknown_keys:
         raise ValueError(f"configure input has unsupported fields: {', '.join(sorted(unknown_keys))}")
     if not obj:
         raise ValueError(
-            "configure input must contain at least one of: cxsk_invoker, shared_stages, cxsk_channels."
+            "configure input must contain at least one of: mams_invoker, shared_stages, mams_channels."
         )
 
-    cxsk_invoker_patch = obj.get(CONFIGURE_CXSK_INVOKER_FIELD)
-    if cxsk_invoker_patch is not None:
-        if not isinstance(cxsk_invoker_patch, dict):
-            raise ValueError("configure field cxsk_invoker must be a JSON object.")
-        allowed_cxsk_invoker_keys = {"baseline", "working_style", "extra_context", "stage_guidance", "can_mutate"}
-        unknown_cxsk_invoker_keys = set(cxsk_invoker_patch.keys()) - allowed_cxsk_invoker_keys
-        if unknown_cxsk_invoker_keys:
+    mams_invoker_patch = obj.get(CONFIGURE_MAMS_INVOKER_FIELD)
+    if mams_invoker_patch is not None:
+        if not isinstance(mams_invoker_patch, dict):
+            raise ValueError("configure field mams_invoker must be a JSON object.")
+        allowed_mams_invoker_keys = {"baseline", "working_style", "extra_context", "stage_guidance", "can_mutate"}
+        unknown_mams_invoker_keys = set(mams_invoker_patch.keys()) - allowed_mams_invoker_keys
+        if unknown_mams_invoker_keys:
             raise ValueError(
-                "configure.cxsk_invoker has unsupported fields: "
-                + ", ".join(sorted(unknown_cxsk_invoker_keys))
+                "configure.mams_invoker has unsupported fields: "
+                + ", ".join(sorted(unknown_mams_invoker_keys))
             )
-        if "stage_guidance" in cxsk_invoker_patch and cxsk_invoker_patch["stage_guidance"] is not None:
-            cxsk_invoker_patch = dict(cxsk_invoker_patch)
-            cxsk_invoker_patch["stage_guidance"] = parse_nullable_string_patch_map(
-                cxsk_invoker_patch["stage_guidance"],
-                field_name="configure.cxsk_invoker.stage_guidance",
+        if "stage_guidance" in mams_invoker_patch and mams_invoker_patch["stage_guidance"] is not None:
+            mams_invoker_patch = dict(mams_invoker_patch)
+            mams_invoker_patch["stage_guidance"] = parse_nullable_string_patch_map(
+                mams_invoker_patch["stage_guidance"],
+                field_name="configure.mams_invoker.stage_guidance",
             )
         for field in ("baseline", "working_style", "extra_context"):
-            if field in cxsk_invoker_patch:
-                value = cxsk_invoker_patch[field]
+            if field in mams_invoker_patch:
+                value = mams_invoker_patch[field]
                 if value is not None and (not isinstance(value, str) or not value.strip()):
-                    raise ValueError(f"configure.cxsk_invoker.{field} must be a non-empty string or null.")
+                    raise ValueError(f"configure.mams_invoker.{field} must be a non-empty string or null.")
                 if isinstance(value, str):
-                    cxsk_invoker_patch[field] = value.strip()
-        if "can_mutate" in cxsk_invoker_patch and not isinstance(cxsk_invoker_patch["can_mutate"], bool):
-            raise ValueError("configure.cxsk_invoker.can_mutate must be a boolean when provided.")
+                    mams_invoker_patch[field] = value.strip()
+        if "can_mutate" in mams_invoker_patch and not isinstance(mams_invoker_patch["can_mutate"], bool):
+            raise ValueError("configure.mams_invoker.can_mutate must be a boolean when provided.")
 
     shared_stages_patch = obj.get(CONFIGURE_SHARED_STAGES_FIELD)
     if shared_stages_patch is not None:
@@ -1236,16 +1267,16 @@ def parse_configure_payload(stdin_text: str) -> ConfigurePayload:
             field_name="configure.shared_stages",
         )
 
-    cxsk_channels_patch_value = obj.get(CONFIGURE_CXSK_CHANNELS_FIELD)
-    cxsk_channels_patch: Optional[list[dict[str, object]]] = None
-    if cxsk_channels_patch_value is not None:
-        if not isinstance(cxsk_channels_patch_value, list):
-            raise ValueError("configure field cxsk_channels must be a JSON array.")
-        cxsk_channels_patch = []
-        for index, raw_cxsk_channel in enumerate(cxsk_channels_patch_value):
-            if not isinstance(raw_cxsk_channel, dict):
-                raise ValueError(f"configure.cxsk_channels[{index}] must be a JSON object.")
-            allowed_cxsk_channel_keys = {
+    mams_channels_patch_value = obj.get(CONFIGURE_MAMS_CHANNELS_FIELD)
+    mams_channels_patch: Optional[list[dict[str, object]]] = None
+    if mams_channels_patch_value is not None:
+        if not isinstance(mams_channels_patch_value, list):
+            raise ValueError("configure field mams_channels must be a JSON array.")
+        mams_channels_patch = []
+        for index, raw_mams_channel in enumerate(mams_channels_patch_value):
+            if not isinstance(raw_mams_channel, dict):
+                raise ValueError(f"configure.mams_channels[{index}] must be a JSON object.")
+            allowed_mams_channel_keys = {
                 "name",
                 "description",
                 "focus",
@@ -1253,41 +1284,53 @@ def parse_configure_payload(stdin_text: str) -> ConfigurePayload:
                 "extra_context",
                 "stage_guidance",
                 "can_mutate",
+                "runner",
+                "runner_config",
                 "model",
                 "reasoning_effort",
             }
-            unknown_cxsk_channel_keys = set(raw_cxsk_channel.keys()) - allowed_cxsk_channel_keys
-            if unknown_cxsk_channel_keys:
+            unknown_mams_channel_keys = set(raw_mams_channel.keys()) - allowed_mams_channel_keys
+            if unknown_mams_channel_keys:
                 raise ValueError(
-                    f"configure.cxsk_channels[{index}] has unsupported fields: {', '.join(sorted(unknown_cxsk_channel_keys))}"
+                    f"configure.mams_channels[{index}] has unsupported fields: {', '.join(sorted(unknown_mams_channel_keys))}"
                 )
-            name = normalize_optional_string(raw_cxsk_channel.get("name"))
+            name = normalize_optional_string(raw_mams_channel.get("name"))
             if not name:
-                raise ValueError(f"configure.cxsk_channels[{index}] requires a non-empty string field: name.")
-            normalized_cxsk_channel = dict(raw_cxsk_channel)
-            normalized_cxsk_channel["name"] = name
-            for field in ("description", "focus", "baseline", "extra_context", "model", "reasoning_effort"):
-                if field in normalized_cxsk_channel:
-                    value = normalized_cxsk_channel[field]
+                raise ValueError(f"configure.mams_channels[{index}] requires a non-empty string field: name.")
+            normalized_mams_channel = dict(raw_mams_channel)
+            normalized_mams_channel["name"] = name
+            for field in ("description", "focus", "baseline", "extra_context", "model", "reasoning_effort", "runner"):
+                if field in normalized_mams_channel:
+                    value = normalized_mams_channel[field]
                     if value is not None and (not isinstance(value, str) or not value.strip()):
                         raise ValueError(
-                            f"configure.cxsk_channels[{index}].{field} must be a non-empty string or null."
+                            f"configure.mams_channels[{index}].{field} must be a non-empty string or null."
                         )
                     if isinstance(value, str):
-                        normalized_cxsk_channel[field] = value.strip()
-            if "stage_guidance" in normalized_cxsk_channel and normalized_cxsk_channel["stage_guidance"] is not None:
-                normalized_cxsk_channel["stage_guidance"] = parse_nullable_string_patch_map(
-                    normalized_cxsk_channel["stage_guidance"],
-                    field_name=f"configure.cxsk_channels[{index}].stage_guidance",
+                        normalized_mams_channel[field] = value.strip()
+            if "stage_guidance" in normalized_mams_channel and normalized_mams_channel["stage_guidance"] is not None:
+                normalized_mams_channel["stage_guidance"] = parse_nullable_string_patch_map(
+                    normalized_mams_channel["stage_guidance"],
+                    field_name=f"configure.mams_channels[{index}].stage_guidance",
                 )
-            if "can_mutate" in normalized_cxsk_channel and not isinstance(normalized_cxsk_channel["can_mutate"], bool):
-                raise ValueError(f"configure.cxsk_channels[{index}].can_mutate must be a boolean when provided.")
-            cxsk_channels_patch.append(normalized_cxsk_channel)
+            if "runner" in normalized_mams_channel:
+                normalized_mams_channel["runner"] = normalize_runner(
+                    normalized_mams_channel["runner"],
+                    field_name=f"configure.mams_channels[{index}].runner",
+                )
+            if "runner_config" in normalized_mams_channel:
+                normalized_mams_channel["runner_config"] = normalize_runner_config(
+                    normalized_mams_channel["runner_config"],
+                    field_name=f"configure.mams_channels[{index}].runner_config",
+                )
+            if "can_mutate" in normalized_mams_channel and not isinstance(normalized_mams_channel["can_mutate"], bool):
+                raise ValueError(f"configure.mams_channels[{index}].can_mutate must be a boolean when provided.")
+            mams_channels_patch.append(normalized_mams_channel)
 
     return ConfigurePayload(
-        cxsk_invoker_patch=cxsk_invoker_patch,
+        mams_invoker_patch=mams_invoker_patch,
         shared_stages_patch=shared_stages_patch,
-        cxsk_channels_patch=cxsk_channels_patch,
+        mams_channels_patch=mams_channels_patch,
     )
 
 
@@ -1363,7 +1406,7 @@ def build_labeled_content_block(tag_name: str, label: str, content: str) -> str:
     return wrap_tagged_block(tag_name, f"{label}\n{content.strip()}")
 
 
-def build_codex_skill_reminder_text_for_codex(
+def build_mams_reminder_text_for_channel(
     tool: str,
     *,
     full: bool,
@@ -1374,75 +1417,75 @@ def build_codex_skill_reminder_text_for_codex(
 
     brief_map = {
         "sync": (
-            "Persistent collaboration turn with the cxsk_invoker, not the end user. "
+            "Persistent collaboration turn with the mams_invoker, not the end user. "
             "Sync only; discussion, coordination, disagreement handling, and review relay are allowed, but mutation is not. "
             "The configured User Reminder still applies in full. "
             "Return ## Discussion Reply, and add ## Plan only when a candidate plan is genuinely ready. "
-            "Compare evidence, surface disagreement clearly, and only ask the cxsk_invoker to escalate to the user "
-            "if a real unresolved disagreement between you and the cxsk_invoker has persisted for about 10 turns."
+            "Compare evidence, surface disagreement clearly, and only ask the mams_invoker to escalate to the user "
+            "if a real unresolved disagreement between you and the mams_invoker has persisted for about 10 turns."
         ),
         "review-this-plan": (
             "Hard gate. Review the plan before any mutation, do not mutate in this turn, and judge from facts and whole-system coherence. "
             "The configured User Reminder still applies in full. "
             "The first non-empty line must be approved_to_mutate: true or approved_to_mutate: false, followed by ## Plan Review Reply. "
-            "Do not ask for user input unless a real unresolved disagreement between you and the cxsk_invoker has persisted for about 10 turns."
+            "Do not ask for user input unless a real unresolved disagreement between you and the mams_invoker has persisted for about 10 turns."
         ),
         "review-this-work": (
             "Hard gate. Review the actual work, not intent; do not mutate in this turn. "
             "The configured User Reminder still applies in full. "
             "The first non-empty line must be approved_work: true or approved_work: false, followed by ## Work Review Reply. "
-            "Do not ask for user input unless a real unresolved disagreement between you and the cxsk_invoker has persisted for about 10 turns."
+            "Do not ask for user input unless a real unresolved disagreement between you and the mams_invoker has persisted for about 10 turns."
         ),
         "execute-this-plan": (
             "The configured User Reminder still applies in full. "
-            "Execution turn for a mutate-capable cxsk_channel. Execute the approved plan as a substantial unit, do not stop for trivial progress, and only stop when the approved plan is complete or a real blocker prevents safe continuation. "
+            "Execution turn for a mutate-capable mams_channel. Execute the approved plan as a substantial unit, do not stop for trivial progress, and only stop when the approved plan is complete or a real blocker prevents safe continuation. "
             "Do not widen scope and do not ask the user directly."
         ),
         "execute-this-plan-part": (
             "The configured User Reminder still applies in full. "
-            "Execution turn for a mutate-capable cxsk_channel. Use a plan part only when the full plan is genuinely too large; a plan part must still be a substantial coherent chunk, not a trivial fragment. "
+            "Execution turn for a mutate-capable mams_channel. Use a plan part only when the full plan is genuinely too large; a plan part must still be a substantial coherent chunk, not a trivial fragment. "
             "Do not stop for incidental small edits. Stop only when the approved plan part is complete or a real blocker prevents safe continuation."
         ),
     }
     return brief_map.get(tool, prompt_text.strip())
 
 
-def build_codex_skill_reminder_text_for_invoker(tool: str, *, full: bool) -> str:
+def build_mams_reminder_text_for_invoker(tool: str, *, full: bool) -> str:
     full_map = {
         "init": (
             "Run init on every new shared task and after compact/context clear when you need to re-bootstrap shared context. "
             "Init is collaboration bootstrap only. It is not discussion and not mutation."
         ),
         "invoke": (
-            "Use invoke as the preferred wrapper when coordinating one or more cxsk_channels. "
+            "Use invoke as the preferred wrapper when coordinating one or more mams_channels. "
             "Let invoke block until every requested call settles; do not wrap these calls in external polling or repeated status checks."
         ),
         "sync": (
             "This is the general sync turn. Use it for discussion, coordination, disagreement handling, plan repair, and relaying review outcomes. "
-            "Keep pushing for real consensus, and do not stop for user input unless a real unresolved cxsk_invoker/Codex disagreement has persisted for about 10 turns."
+            "Keep pushing for real consensus, and do not stop for user input unless a real unresolved mams_invoker/channel disagreement has persisted for about 10 turns."
         ),
         "review-this-plan": (
             "This is the hard gate before execution begins. Submit a concrete plan, require direct fact-checking, and do not treat mere discussion as approval. "
-            "Do not ask the user just because execution feels uncertain; escalate only when a real unresolved cxsk_invoker/Codex disagreement has persisted for about 10 turns."
+            "Do not ask the user just because execution feels uncertain; escalate only when a real unresolved mams_invoker/channel disagreement has persisted for about 10 turns."
         ),
         "review-this-work": (
             "This is the hard gate before delivery. Review actual work, evidence, and coherence. "
             "approved_work: true accepts only the reviewed execution scope, not automatically the whole larger plan; if more agreed scopes remain, continue directly instead of stopping. "
-            "Do not ask the user just because next execution steps are undecided; escalate only when a real unresolved cxsk_invoker/Codex disagreement has persisted for about 10 turns."
+            "Do not ask the user just because next execution steps are undecided; escalate only when a real unresolved mams_invoker/channel disagreement has persisted for about 10 turns."
         ),
         "execute-this-plan": (
             "This is the execution turn for a whole approved plan. Do not fragment execution into trivial pieces. Finish the approved plan unless a real blocker or invalidated premise forces a stop. "
-            "Escalate to the user only for a real unresolved cxsk_invoker/Codex disagreement that has persisted for about 10 turns."
+            "Escalate to the user only for a real unresolved mams_invoker/channel disagreement that has persisted for about 10 turns."
         ),
         "execute-this-plan-part": (
             "This is the execution turn for one approved plan part. Use a plan part only when the full plan is genuinely too large, and require the approved part to be a substantial coherent chunk rather than a tiny fragment. "
-            "Do not ask the user about whether to continue execution unless a real unresolved cxsk_invoker/Codex disagreement has persisted for about 10 turns."
+            "Do not ask the user about whether to continue execution unless a real unresolved mams_invoker/channel disagreement has persisted for about 10 turns."
         ),
         "configure": (
-            "This command applies a cxsk_invoker-supplied config patch. It does not mutate task files and it does not replace session continuity by itself."
+            "This command applies a mams_invoker-supplied config patch. It does not mutate task files and it does not replace session continuity by itself."
         ),
         "update-config": (
-            "This command normalizes managed state into the canonical Codex Skill config. It does not mutate task files and it does not replace session continuity by itself."
+            "This command normalizes managed state into the canonical Mad Agent Mesh config. It does not mutate task files and it does not replace session continuity by itself."
         ),
         "dangerous-new-session": (
             "This command is for destructive continuity replacement. Use it only when the user explicitly authorizes abandoning or switching the managed session continuity."
@@ -1450,24 +1493,24 @@ def build_codex_skill_reminder_text_for_invoker(tool: str, *, full: bool) -> str
     }
     brief_map = {
         "init": "Init re-establishes the collaboration baseline. Use full reminders here.",
-        "invoke": "Preferred blocking wrapper for one or more cxsk_channel calls. Let invoke wait once and return settled results; do not externally poll.",
-        "sync": "General sync only. No mutation permission. Full Codex Skill reminder still applies, and the configured User Reminder still applies in full. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
-        "review-this-plan": "Hard gate before execution. Full Codex Skill reminder still applies, and the configured User Reminder still applies in full. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
-        "review-this-work": "Hard gate before accepted delivery. approved_work: true accepts only the reviewed execution scope; continue if more agreed scopes remain. Full Codex Skill reminder still applies, and the configured User Reminder still applies in full. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
-        "execute-this-plan": "Execute the approved plan as a substantial whole. Do not stop for trivial progress. Full Codex Skill reminder still applies, and the configured User Reminder still applies in full.",
-        "execute-this-plan-part": "Execute only the approved plan part, and only use plan-part mode for genuinely large plans. The approved part must still be substantial. Full Codex Skill reminder still applies, and the configured User Reminder still applies in full.",
-        "configure": "CXSK invoker-supplied config patch only. Full Codex Skill reminder still applies.",
-        "update-config": "Config update only. Full Codex Skill reminder still applies.",
-        "dangerous-new-session": "Destructive continuity replacement. Full Codex Skill reminder still applies.",
+        "invoke": "Preferred blocking wrapper for one or more mams_channel calls. Let invoke wait once and return settled results; do not externally poll.",
+        "sync": "General sync only. No mutation permission. Full Mad Agent Mesh reminder still applies, and the configured User Reminder still applies in full. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
+        "review-this-plan": "Hard gate before execution. Full Mad Agent Mesh reminder still applies, and the configured User Reminder still applies in full. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
+        "review-this-work": "Hard gate before accepted delivery. approved_work: true accepts only the reviewed execution scope; continue if more agreed scopes remain. Full Mad Agent Mesh reminder still applies, and the configured User Reminder still applies in full. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
+        "execute-this-plan": "Execute the approved plan as a substantial whole. Do not stop for trivial progress. Full Mad Agent Mesh reminder still applies, and the configured User Reminder still applies in full.",
+        "execute-this-plan-part": "Execute only the approved plan part, and only use plan-part mode for genuinely large plans. The approved part must still be substantial. Full Mad Agent Mesh reminder still applies, and the configured User Reminder still applies in full.",
+        "configure": "MAMS invoker-supplied config patch only. Full Mad Agent Mesh reminder still applies.",
+        "update-config": "Config update only. Full Mad Agent Mesh reminder still applies.",
+        "dangerous-new-session": "Destructive continuity replacement. Full Mad Agent Mesh reminder still applies.",
     }
     return (full_map if full else brief_map).get(tool, "")
 
 
-def collaborative_turn_index(tool: str, cxsk_channel: CxskChannelConfig) -> int:
+def collaborative_turn_index(tool: str, mams_channel: MamsChannelConfig) -> int:
     if tool == "init":
         return 0
     if tool in {"sync", "review-this-plan", "review-this-work", "execute-this-plan", "execute-this-plan-part"}:
-        return cxsk_channel.reminder_turn_count + 1
+        return mams_channel.reminder_turn_count + 1
     return 0
 
 
@@ -1480,7 +1523,7 @@ def should_use_full_reminder(tool: str, turn_index: int) -> bool:
 
 
 def build_common_stage_items(
-    config: CxskSkillConfig,
+    config: MamsSkillConfig,
     *,
     tool: str,
 ) -> list[tuple[str, str]]:
@@ -1494,77 +1537,77 @@ def build_common_stage_items(
     return items
 
 
-def build_cxsk_invoker_user_items(
-    config: CxskSkillConfig,
+def build_mams_invoker_user_items(
+    config: MamsSkillConfig,
     *,
     tool: str,
 ) -> list[tuple[str, str]]:
     items: list[tuple[str, str]] = []
     stage_name = tool
 
-    if config.cxsk_invoker.baseline:
-        items.append(("CXSK Invoker Baseline", config.cxsk_invoker.baseline))
-    if config.cxsk_invoker.working_style:
-        items.append(("CXSK Invoker Working Style", config.cxsk_invoker.working_style))
-    if config.cxsk_invoker.extra_context:
-        items.append(("CXSK Invoker Extra Context", config.cxsk_invoker.extra_context))
+    if config.mams_invoker.baseline:
+        items.append(("MAMS Invoker Baseline", config.mams_invoker.baseline))
+    if config.mams_invoker.working_style:
+        items.append(("MAMS Invoker Working Style", config.mams_invoker.working_style))
+    if config.mams_invoker.extra_context:
+        items.append(("MAMS Invoker Extra Context", config.mams_invoker.extra_context))
     items.append(
         (
-            "CXSK Invoker Mutation Permission",
+            "MAMS Invoker Mutation Permission",
             (
-                "The cxsk_invoker is allowed to mutate directly when appropriate."
-                if config.cxsk_invoker.can_mutate
-                else "The cxsk_invoker is not allowed to mutate directly and must route implementation through a mutate-capable cxsk_channel."
+                "The mams_invoker is allowed to mutate directly when appropriate."
+                if config.mams_invoker.can_mutate
+                else "The mams_invoker is not allowed to mutate directly and must route implementation through a mutate-capable mams_channel."
             ),
         )
     )
 
-    cxsk_invoker_stage_text = config.cxsk_invoker.stage_guidance.get(stage_name)
-    if cxsk_invoker_stage_text:
-        items.append(("CXSK Invoker Stage Guidance", cxsk_invoker_stage_text))
+    mams_invoker_stage_text = config.mams_invoker.stage_guidance.get(stage_name)
+    if mams_invoker_stage_text:
+        items.append(("MAMS Invoker Stage Guidance", mams_invoker_stage_text))
 
     return items
 
 
-def build_cxsk_channel_user_items(
-    config: CxskSkillConfig,
-    cxsk_channel: CxskChannelConfig,
+def build_mams_channel_user_items(
+    config: MamsSkillConfig,
+    mams_channel: MamsChannelConfig,
     *,
     tool: str,
 ) -> list[tuple[str, str]]:
     stage_name = tool
     items: list[tuple[str, str]] = []
 
-    if cxsk_channel.description and cxsk_channel.description != default_cxsk_channel_description(cxsk_channel.name):
-        items.append(("CXSK Channel Description", cxsk_channel.description))
-    if cxsk_channel.focus:
-        items.append(("CXSK Channel Focus", cxsk_channel.focus))
-    if cxsk_channel.baseline:
-        items.append(("CXSK Channel Baseline", cxsk_channel.baseline))
-    if cxsk_channel.extra_context:
-        items.append(("CXSK Channel Extra Context", cxsk_channel.extra_context))
+    if mams_channel.description and mams_channel.description != default_mams_channel_description(mams_channel.name):
+        items.append(("MAMS Channel Description", mams_channel.description))
+    if mams_channel.focus:
+        items.append(("MAMS Channel Focus", mams_channel.focus))
+    if mams_channel.baseline:
+        items.append(("MAMS Channel Baseline", mams_channel.baseline))
+    if mams_channel.extra_context:
+        items.append(("MAMS Channel Extra Context", mams_channel.extra_context))
     items.append(
         (
-            "CXSK Channel Mutation Permission",
+            "MAMS Channel Mutation Permission",
             (
-                "This cxsk_channel may mutate when the workflow explicitly reaches the mutation entrypoint."
-                if cxsk_channel.can_mutate
-                else "This cxsk_channel must not mutate files. It may discuss, review, or plan, but implementation must be routed elsewhere."
+                "This mams_channel may mutate when the workflow explicitly reaches the mutation entrypoint."
+                if mams_channel.can_mutate
+                else "This mams_channel must not mutate files. It may discuss, review, or plan, but implementation must be routed elsewhere."
             ),
         )
     )
 
-    cxsk_channel_stage_text = cxsk_channel.stage_guidance.get(stage_name)
-    if cxsk_channel_stage_text:
-        items.append(("CXSK Channel Stage Guidance", cxsk_channel_stage_text))
+    mams_channel_stage_text = mams_channel.stage_guidance.get(stage_name)
+    if mams_channel_stage_text:
+        items.append(("MAMS Channel Stage Guidance", mams_channel_stage_text))
 
     return items
 
 
 def compose_prompt(
     repo_root: Path,
-    config: CxskSkillConfig,
-    cxsk_channel: CxskChannelConfig,
+    config: MamsSkillConfig,
+    mams_channel: MamsChannelConfig,
     *,
     tool: str,
     full_reminder: bool,
@@ -1573,8 +1616,8 @@ def compose_prompt(
     if not base_parts:
         raise RuntimeError("compose_prompt requires at least one base part.")
     common_items = build_common_stage_items(config, tool=tool)
-    agent_items = build_cxsk_channel_user_items(config, cxsk_channel, tool=tool)
-    skill_reminder = build_codex_skill_reminder_text_for_codex(
+    agent_items = build_mams_channel_user_items(config, mams_channel, tool=tool)
+    skill_reminder = build_mams_reminder_text_for_channel(
         tool,
         full=full_reminder,
         prompt_text=base_parts[0],
@@ -1584,8 +1627,8 @@ def compose_prompt(
     if common_body:
         skill_body_parts.append(common_body)
     skill_block = wrap_tagged_block(
-        "CODEX_SKILL_REMINDER_FULL" if full_reminder else "CODEX_SKILL_REMINDER_BRIEF",
-        "## Codex Skill Reminder ({})\n\n{}".format(
+        "MAMS_REMINDER_FULL" if full_reminder else "MAMS_REMINDER_BRIEF",
+        "## Mad Agent Mesh Reminder ({})\n\n{}".format(
             "Full" if full_reminder else "Brief",
             "\n\n".join(part for part in skill_body_parts if part).strip(),
         ),
@@ -1607,9 +1650,9 @@ def compose_prompt(
     return "\n\n".join(part for part in prompt_parts if part).strip() + "\n"
 
 
-def format_output_for_cxsk_invoker(
+def format_output_for_mams_invoker(
     repo_root: Path,
-    config: CxskSkillConfig,
+    config: MamsSkillConfig,
     *,
     tool: str,
     full_reminder: bool,
@@ -1618,20 +1661,20 @@ def format_output_for_cxsk_invoker(
 ) -> str:
     normalized_reply = reply.rstrip()
     common_items = build_common_stage_items(config, tool=tool)
-    cxsk_invoker_items = build_cxsk_invoker_user_items(config, tool=tool)
-    skill_body_parts = [build_codex_skill_reminder_text_for_invoker(tool, full=full_reminder)]
+    mams_invoker_items = build_mams_invoker_user_items(config, tool=tool)
+    skill_body_parts = [build_mams_reminder_text_for_invoker(tool, full=full_reminder)]
     common_body = render_named_items(common_items)
     if common_body:
         skill_body_parts.append(common_body)
     skill_block = wrap_tagged_block(
-        "CODEX_SKILL_REMINDER_FULL" if full_reminder else "CODEX_SKILL_REMINDER_BRIEF",
-        "## Codex Skill Reminder ({})\n\n{}".format(
+        "MAMS_REMINDER_FULL" if full_reminder else "MAMS_REMINDER_BRIEF",
+        "## Mad Agent Mesh Reminder ({})\n\n{}".format(
             "Full" if full_reminder else "Brief",
             "\n\n".join(part for part in skill_body_parts if part).strip(),
         ),
     )
 
-    user_body = render_named_items(cxsk_invoker_items)
+    user_body = render_named_items(mams_invoker_items)
     user_block = ""
     if user_body:
         user_block = wrap_tagged_block(
@@ -1648,7 +1691,7 @@ def format_output_for_cxsk_invoker(
         skill_block,
         *ref_notice_sections,
         user_block,
-        wrap_tagged_block("CODEX_REPLY", f"## Codex Reply\n\n{normalized_reply}"),
+        wrap_tagged_block("CHANNEL_REPLY", f"## Channel Reply\n\n{normalized_reply}"),
     ]
     return append_migration_notice("\n\n".join(part for part in parts if part), migration_notice)
 
@@ -1672,7 +1715,7 @@ def format_invoke_summary(
     for item in results:
         result_body = "\n".join(
             [
-                f"## {item.request.cxsk_channel_name or DEFAULT_CXSK_CHANNEL_NAME} · {item.request.command} · {item.status}",
+                f"## {item.request.mams_channel_name or DEFAULT_MAMS_CHANNEL_NAME} · {item.request.command} · {item.status}",
                 "",
                 item.reply if item.status == "ok" and item.reply is not None else f"Error: {item.error}",
             ]
@@ -1686,22 +1729,22 @@ def format_invoke_summary(
 
 def build_init_prompt(
     repo_root: Path,
-    config: CxskSkillConfig,
-    cxsk_channel: CxskChannelConfig,
+    config: MamsSkillConfig,
+    mams_channel: MamsChannelConfig,
     stdin_text: str,
 ) -> tuple[str, str]:
     payload = parse_init_payload(stdin_text)
     if payload.mode == "task":
         prompt_name = "init-task.md"
-        label = "Task background from the cxsk_invoker:"
+        label = "Task background from the mams_invoker:"
     else:
         prompt_name = "init-recovery.md"
-        label = "Recovery background from the cxsk_invoker:"
+        label = "Recovery background from the mams_invoker:"
 
     prompt = compose_prompt(
         repo_root,
         config,
-        cxsk_channel,
+        mams_channel,
         tool="init",
         full_reminder=True,
         base_parts=[
@@ -1719,8 +1762,8 @@ def build_init_prompt(
 
 def build_review_this_plan_prompt(
     repo_root: Path,
-    config: CxskSkillConfig,
-    cxsk_channel: CxskChannelConfig,
+    config: MamsSkillConfig,
+    mams_channel: MamsChannelConfig,
     stdin_text: str,
     *,
     full_reminder: bool,
@@ -1728,13 +1771,13 @@ def build_review_this_plan_prompt(
     payload = parse_review_this_plan_payload(stdin_text)
     parts = [
         load_prompt_asset("review-this-plan.md"),
-        build_labeled_content_block("PLAN_FOR_REVIEW", "Plan for review from the cxsk_invoker:", payload.plan_for_review),
+        build_labeled_content_block("PLAN_FOR_REVIEW", "Plan for review from the mams_invoker:", payload.plan_for_review),
     ]
 
     if payload.new_information:
         parts.extend(
             [
-                build_labeled_content_block("NEW_INFORMATION", "New information from the cxsk_invoker:", payload.new_information),
+                build_labeled_content_block("NEW_INFORMATION", "New information from the mams_invoker:", payload.new_information),
             ]
         )
 
@@ -1748,7 +1791,7 @@ def build_review_this_plan_prompt(
     return compose_prompt(
         repo_root,
         config,
-        cxsk_channel,
+        mams_channel,
         tool="review-this-plan",
         full_reminder=full_reminder,
         base_parts=parts,
@@ -1757,8 +1800,8 @@ def build_review_this_plan_prompt(
 
 def build_sync_prompt(
     repo_root: Path,
-    config: CxskSkillConfig,
-    cxsk_channel: CxskChannelConfig,
+    config: MamsSkillConfig,
+    mams_channel: MamsChannelConfig,
     stdin_text: str,
     *,
     full_reminder: bool,
@@ -1766,7 +1809,7 @@ def build_sync_prompt(
     payload = parse_sync_payload(stdin_text)
     parts = [
         load_prompt_asset("sync.md"),
-        build_labeled_content_block("SYNC_MESSAGE", "Sync message from the cxsk_invoker:", payload.sync_message),
+        build_labeled_content_block("SYNC_MESSAGE", "Sync message from the mams_invoker:", payload.sync_message),
     ]
 
     if payload.fresh_user_message:
@@ -1779,7 +1822,7 @@ def build_sync_prompt(
     return compose_prompt(
         repo_root,
         config,
-        cxsk_channel,
+        mams_channel,
         tool="sync",
         full_reminder=full_reminder,
         base_parts=parts,
@@ -1788,8 +1831,8 @@ def build_sync_prompt(
 
 def build_review_this_work_prompt(
     repo_root: Path,
-    config: CxskSkillConfig,
-    cxsk_channel: CxskChannelConfig,
+    config: MamsSkillConfig,
+    mams_channel: MamsChannelConfig,
     stdin_text: str,
     *,
     full_reminder: bool,
@@ -1797,13 +1840,13 @@ def build_review_this_work_prompt(
     payload = parse_review_this_work_payload(stdin_text)
     parts = [
         load_prompt_asset("review-this-work.md"),
-        build_labeled_content_block("WORK_FOR_REVIEW", "Work for review from the cxsk_invoker:", payload.work_for_review),
+        build_labeled_content_block("WORK_FOR_REVIEW", "Work for review from the mams_invoker:", payload.work_for_review),
     ]
 
     if payload.new_information:
         parts.extend(
             [
-                build_labeled_content_block("NEW_INFORMATION", "New information from the cxsk_invoker:", payload.new_information),
+                build_labeled_content_block("NEW_INFORMATION", "New information from the mams_invoker:", payload.new_information),
             ]
         )
 
@@ -1817,7 +1860,7 @@ def build_review_this_work_prompt(
     return compose_prompt(
         repo_root,
         config,
-        cxsk_channel,
+        mams_channel,
         tool="review-this-work",
         full_reminder=full_reminder,
         base_parts=parts,
@@ -1826,8 +1869,8 @@ def build_review_this_work_prompt(
 
 def build_execute_prompt(
     repo_root: Path,
-    config: CxskSkillConfig,
-    cxsk_channel: CxskChannelConfig,
+    config: MamsSkillConfig,
+    mams_channel: MamsChannelConfig,
     stdin_text: str,
     *,
     full_reminder: bool,
@@ -1842,15 +1885,15 @@ def build_execute_prompt(
             (
                 "workspace-write (default mutation sandbox)."
                 if payload.sandbox_mode == EXECUTE_SANDBOX_DEFAULT
-                else "danger-full-access (explicit full-access escalation approved by the cxsk_invoker)."
+                else "danger-full-access (explicit full-access escalation approved by the mams_invoker)."
             ),
         ),
         build_labeled_content_block(
             "APPROVED_PLAN" if mode == "execute-this-plan" else "APPROVED_PLAN_PART",
             (
-                "Approved plan from the cxsk_invoker:"
+                "Approved plan from the mams_invoker:"
                 if mode == "execute-this-plan"
-                else "Approved plan part from the cxsk_invoker:"
+                else "Approved plan part from the mams_invoker:"
             ),
             payload.approved_scope,
         ),
@@ -1866,14 +1909,14 @@ def build_execute_prompt(
     return compose_prompt(
         repo_root,
         config,
-        cxsk_channel,
+        mams_channel,
         tool=mode,
         full_reminder=full_reminder,
         base_parts=parts,
     )
 
 
-def resolve_codex_exec_sandbox(cmd: str, stdin_text: str) -> str:
+def resolve_execution_sandbox(cmd: str, stdin_text: str) -> str:
     if cmd in {"execute-this-plan", "execute-this-plan-part"}:
         payload = parse_execute_payload(stdin_text, mode=cmd)
         if payload.sandbox_mode == EXECUTE_SANDBOX_FULL_ACCESS:
@@ -1885,7 +1928,7 @@ def resolve_codex_exec_sandbox(cmd: str, stdin_text: str) -> str:
 def normalize_reply_text(reply: str) -> str:
     normalized = reply.replace("\r\n", "\n").replace("\r", "\n").strip()
     if not normalized:
-        raise ValueError("Codex reply is empty.")
+        raise ValueError("Channel reply is empty.")
     return normalized
 
 
@@ -1956,23 +1999,23 @@ def validate_sync_reply(reply: str) -> str:
 
 def build_prompt(
     repo_root: Path,
-    config: CxskSkillConfig,
-    cxsk_channel: CxskChannelConfig,
+    config: MamsSkillConfig,
+    mams_channel: MamsChannelConfig,
     tool: str,
     stdin_text: str,
     *,
     full_reminder: bool,
 ) -> str:
     if tool == "init":
-        prompt, _mode = build_init_prompt(repo_root, config, cxsk_channel, stdin_text)
+        prompt, _mode = build_init_prompt(repo_root, config, mams_channel, stdin_text)
         return prompt
     if tool == "sync":
-        return build_sync_prompt(repo_root, config, cxsk_channel, stdin_text, full_reminder=full_reminder)
+        return build_sync_prompt(repo_root, config, mams_channel, stdin_text, full_reminder=full_reminder)
     if tool == "review-this-plan":
         return build_review_this_plan_prompt(
             repo_root,
             config,
-            cxsk_channel,
+            mams_channel,
             stdin_text,
             full_reminder=full_reminder,
         )
@@ -1980,7 +2023,7 @@ def build_prompt(
         return build_review_this_work_prompt(
             repo_root,
             config,
-            cxsk_channel,
+            mams_channel,
             stdin_text,
             full_reminder=full_reminder,
         )
@@ -1988,7 +2031,7 @@ def build_prompt(
         return build_execute_prompt(
             repo_root,
             config,
-            cxsk_channel,
+            mams_channel,
             stdin_text,
             full_reminder=full_reminder,
             mode=tool,
@@ -2025,7 +2068,7 @@ def detect_thread_id(event: dict) -> Optional[str]:
 
 
 @dataclass
-class CodexRunResult:
+class RunnerRunResult:
     session_id: str
     reply: str
 
@@ -2036,15 +2079,15 @@ class InvokeSettledResult:
     status: str
     reply: Optional[str]
     error: Optional[str]
-    updated_cxsk_channel: Optional[CxskChannelConfig]
+    updated_mams_channel: Optional[MamsChannelConfig]
 
 
 def build_dangerous_new_session_prompt(permission_text: str) -> str:
     return (
-        "You are creating a fresh managed Codex cxsk_channel session for future collaboration.\n"
+        "You are creating a fresh managed MAMS mams_channel session for future collaboration.\n"
         "This call exists only to establish a new session id.\n"
         "Do not ask questions. Do not assume prior task continuity.\n"
-        "Reply with a short plain-text acknowledgment that the fresh managed session is ready.\n\n"
+        "Reply with a short plain-text acknowledgment that the fresh managed channel session is ready.\n\n"
         "User permission for replacing the prior managed continuity:\n"
         f"{permission_text}\n"
     )
@@ -2081,10 +2124,119 @@ def command_requires_stdin(command: str) -> bool:
     return command != "update-config"
 
 
-def execute_command_for_cxsk_channel(
+def resolve_claude_permission_mode(
+    sandbox_mode: str,
+    runner_config: dict[str, object],
+) -> str:
+    override = normalize_optional_string(runner_config.get("permission_mode"))
+    if override:
+        return override
+    if sandbox_mode == SANDBOX_DANGER_FULL_ACCESS:
+        return "bypassPermissions"
+    if sandbox_mode == SANDBOX_WORKSPACE_WRITE:
+        return "acceptEdits"
+    return "plan"
+
+
+def resolve_runner_extra_args(runner_config: dict[str, object]) -> list[str]:
+    raw = runner_config.get("extra_args")
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError("runner_config.extra_args must be a JSON array of strings when provided.")
+    extra_args: list[str] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, str) or not item.strip():
+            raise ValueError(
+                f"runner_config.extra_args[{index}] must be a non-empty string when provided."
+            )
+        extra_args.append(item.strip())
+    return extra_args
+
+
+def monitor_runner_process(
+    *,
+    proc: subprocess.Popen[str],
+    timeout_s: int,
+    idle_timeout_s: int,
+    activity_paths: list[Path],
+    on_stdout_line: Callable[[str], None],
+    on_stderr_line: Callable[[str], None],
+    timeout_label: str,
+    inactivity_label: str,
+) -> int:
+    last_activity_at = time.monotonic()
+    tracked_stats: dict[Path, tuple[int, int]] = {path: (-1, -1) for path in activity_paths}
+
+    def mark_activity() -> None:
+        nonlocal last_activity_at
+        last_activity_at = time.monotonic()
+
+    def drain_stdout() -> None:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            if line:
+                mark_activity()
+            on_stdout_line(line)
+
+    def drain_stderr() -> None:
+        assert proc.stderr is not None
+        for line in proc.stderr:
+            if line:
+                mark_activity()
+            on_stderr_line(line)
+
+    stdout_thread = threading.Thread(target=drain_stdout, daemon=True)
+    stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
+    stdout_thread.start()
+    stderr_thread.start()
+
+    started_at = time.monotonic()
+    try:
+        while True:
+            elapsed = time.monotonic() - started_at
+            if elapsed > timeout_s:
+                proc.kill()
+                raise RuntimeError(f"{timeout_label} timed out after {timeout_s}s")
+
+            for path in activity_paths:
+                try:
+                    stat = path.stat()
+                except FileNotFoundError:
+                    continue
+                previous = tracked_stats[path]
+                current = (stat.st_size, stat.st_mtime_ns)
+                if current != previous:
+                    tracked_stats[path] = current
+                    mark_activity()
+
+            if time.monotonic() - last_activity_at > idle_timeout_s:
+                proc.kill()
+                raise RuntimeError(
+                    f"{inactivity_label} became inactive for too long while waiting "
+                    f"(no observable activity for {idle_timeout_s}s)."
+                )
+
+            wait_timeout = max(0.1, min(PROCESS_POLL_INTERVAL_S, timeout_s - elapsed))
+            try:
+                rc = proc.wait(timeout=wait_timeout)
+                break
+            except subprocess.TimeoutExpired:
+                continue
+    except Exception:
+        proc.kill()
+        raise
+    finally:
+        stdout_thread.join(timeout=1)
+        stderr_thread.join(timeout=1)
+
+    return rc
+
+
+def execute_command_for_mams_channel(
     repo_root: Path,
-    config: CxskSkillConfig,
-    cxsk_channel: CxskChannelConfig,
+    config: MamsSkillConfig,
+    mams_channel: MamsChannelConfig,
     *,
     command: str,
     stdin_text: str,
@@ -2092,36 +2244,37 @@ def execute_command_for_cxsk_channel(
     model: Optional[str],
     reasoning_effort: Optional[str],
     full_reminder: bool,
-) -> tuple[str, CxskChannelConfig]:
-    session_id = cxsk_channel.session_id
+) -> tuple[str, MamsChannelConfig]:
+    session_id = mams_channel.session_id
     init_mode: Optional[str] = None
 
-    if command in INVOKE_MUTATING_COMMANDS and not cxsk_channel.can_mutate:
+    if command in INVOKE_MUTATING_COMMANDS and not mams_channel.can_mutate:
         raise RuntimeError(
             "\n".join(
                 [
-                    f"CXSK channel '{cxsk_channel.name}' is configured with can_mutate: false.",
-                    "execute-this-plan and execute-this-plan-part are only allowed for a mutate-capable cxsk_channel.",
-                    "Choose a different cxsk_channel or update the cxsk_channel config through configure.",
+                    f"MAMS channel '{mams_channel.name}' is configured with can_mutate: false.",
+                    "execute-this-plan and execute-this-plan-part are only allowed for a mutate-capable mams_channel.",
+                    "Choose a different mams_channel or update the mams_channel config through configure.",
                 ]
             )
         )
 
     try:
         if command == "init":
-            prompt, init_mode = build_init_prompt(repo_root, config, cxsk_channel, stdin_text)
+            prompt, init_mode = build_init_prompt(repo_root, config, mams_channel, stdin_text)
         else:
             prompt = build_prompt(
                 repo_root,
                 config,
-                cxsk_channel,
+                mams_channel,
                 command,
                 stdin_text,
                 full_reminder=full_reminder,
             )
-        sandbox_mode = resolve_codex_exec_sandbox(command, stdin_text)
-        result = run_codex(
+        sandbox_mode = resolve_execution_sandbox(command, stdin_text)
+        result = run_runner_for_mams_channel(
             repo_root=repo_root,
+            mams_channel=mams_channel,
             session_id=session_id,
             prompt=prompt,
             sandbox_mode=sandbox_mode,
@@ -2136,26 +2289,26 @@ def execute_command_for_cxsk_channel(
                     [
                         str(exc),
                         "",
-                        f"The managed cxsk_channel '{cxsk_channel.name}' has a stored session id locally, but Codex could not resume it.",
-                        "Do not manually delete or replace the managed cxsk_channel config and do not call raw `codex` directly.",
+                        f"The managed mams_channel '{mams_channel.name}' has a stored session id locally, but the configured runner could not resume it.",
+                        "Do not manually delete or replace the managed mams_channel config and do not call raw runner CLIs directly.",
                         "If the user explicitly wants to abandon this continuity and start fresh, run "
-                        "<skill_root>/bin/codex-skill-dangerous-new-session.",
+                        "<skill_root>/bin/dangerous-new-session.",
                     ]
                 )
             ) from exc
         raise
 
-    updated_cxsk_channel = replace(
-        cxsk_channel,
+    updated_mams_channel = replace(
+        mams_channel,
         session_id=result.session_id,
-        model=cxsk_channel.model or model,
-        reasoning_effort=cxsk_channel.reasoning_effort or reasoning_effort,
+        model=mams_channel.model or model,
+        reasoning_effort=mams_channel.reasoning_effort or reasoning_effort,
         reminder_turn_count=(
             0
             if command == "init"
-            else cxsk_channel.reminder_turn_count + 1
+            else mams_channel.reminder_turn_count + 1
             if command in {"sync", "review-this-plan", "review-this-work", "execute-this-plan", "execute-this-plan-part"}
-            else cxsk_channel.reminder_turn_count
+            else mams_channel.reminder_turn_count
         ),
         updated_at=iso_now(),
     )
@@ -2169,30 +2322,30 @@ def execute_command_for_cxsk_channel(
     elif command == "sync":
         result.reply = validate_sync_reply(result.reply)
 
-    return result.reply, updated_cxsk_channel
+    return result.reply, updated_mams_channel
 
 
-def resolve_cxsk_channels_for_command(
+def resolve_mams_channels_for_command(
     repo_root: Path,
-    cxsk_channel_name: str,
+    mams_channel_name: str,
     *,
     default_model: Optional[str],
     default_reasoning_effort: Optional[str],
-) -> tuple[CxskSkillConfig, CxskChannelConfig, Optional[str]]:
-    migration_notice = migrate_cxsk_channels_config_to_latest(
+) -> tuple[MamsSkillConfig, MamsChannelConfig, Optional[str]]:
+    migration_notice = migrate_mams_channels_config_to_latest(
         repo_root,
         default_model=default_model,
         default_reasoning_effort=default_reasoning_effort,
     )
     config = read_skill_config(repo_root)
-    cxsk_channel = find_cxsk_channel(config.cxsk_channels, cxsk_channel_name)
-    if cxsk_channel is None:
-        cxsk_channel = build_cxsk_channel_config(
-            cxsk_channel_name,
+    mams_channel = find_mams_channel(config.mams_channels, mams_channel_name)
+    if mams_channel is None:
+        mams_channel = build_mams_channel_config(
+            mams_channel_name,
             model=default_model,
             reasoning_effort=default_reasoning_effort,
         )
-    return config, cxsk_channel, migration_notice
+    return config, mams_channel, migration_notice
 
 
 def resolve_config_for_update(
@@ -2200,56 +2353,56 @@ def resolve_config_for_update(
     *,
     default_model: Optional[str],
     default_reasoning_effort: Optional[str],
-) -> tuple[CxskSkillConfig, Optional[str], bool]:
-    migration_notice = migrate_cxsk_channels_config_to_latest(
+) -> tuple[MamsSkillConfig, Optional[str], bool]:
+    migration_notice = migrate_mams_channels_config_to_latest(
         repo_root,
         default_model=default_model,
         default_reasoning_effort=default_reasoning_effort,
     )
-    config_path = cxsk_channels_file_path(repo_root)
+    config_path = mams_channels_file_path(repo_root)
     created_canonical = False
     if config_path.exists():
         config = read_skill_config(repo_root)
     else:
-        config = default_cxsk_skill_config([])
+        config = default_mams_skill_config([])
         write_skill_config(repo_root, config)
         created_canonical = True
     return config, migration_notice, created_canonical
 
 
-def persist_cxsk_channels_for_command(
+def persist_mams_channels_for_command(
     repo_root: Path,
-    config: CxskSkillConfig,
-    cxsk_channel: CxskChannelConfig,
+    config: MamsSkillConfig,
+    mams_channel: MamsChannelConfig,
 ) -> None:
     write_skill_config(
         repo_root,
-        CxskSkillConfig(
+        MamsSkillConfig(
             version=CONFIG_VERSION,
-            cxsk_invoker=config.cxsk_invoker,
+            mams_invoker=config.mams_invoker,
             shared_stages=config.shared_stages,
-            cxsk_channels=upsert_cxsk_channel(config.cxsk_channels, replace(cxsk_channel, updated_at=iso_now())),
+            mams_channels=upsert_mams_channel(config.mams_channels, replace(mams_channel, updated_at=iso_now())),
             updated_at=iso_now(),
         ),
     )
 
 
-def persist_multiple_cxsk_channels(
+def persist_multiple_mams_channels(
     repo_root: Path,
-    config: CxskSkillConfig,
-    cxsk_channels: list[CxskChannelConfig],
-) -> CxskSkillConfig:
-    updated_channels = config.cxsk_channels
-    for cxsk_channel in cxsk_channels:
-        updated_channels = upsert_cxsk_channel(
+    config: MamsSkillConfig,
+    mams_channels: list[MamsChannelConfig],
+) -> MamsSkillConfig:
+    updated_channels = config.mams_channels
+    for mams_channel in mams_channels:
+        updated_channels = upsert_mams_channel(
             updated_channels,
-            replace(cxsk_channel, updated_at=iso_now()),
+            replace(mams_channel, updated_at=iso_now()),
         )
-    updated_config = CxskSkillConfig(
+    updated_config = MamsSkillConfig(
         version=CONFIG_VERSION,
-        cxsk_invoker=config.cxsk_invoker,
+        mams_invoker=config.mams_invoker,
         shared_stages=config.shared_stages,
-        cxsk_channels=updated_channels,
+        mams_channels=updated_channels,
         updated_at=iso_now(),
     )
     write_skill_config(repo_root, updated_config)
@@ -2263,7 +2416,7 @@ def append_migration_notice(reply: str, migration_notice: Optional[str]) -> str:
     return (
         f"{normalized}\n\n---\n"
         f"Migration notice: {migration_notice}\n"
-        "Future calls now use the structured managed cxsk_channel config automatically.\n"
+        "Future calls now use the structured managed mams_channel config automatically.\n"
     )
 
 
@@ -2271,7 +2424,7 @@ def run_invoke_command(
     repo_root: Path,
     stdin_text: str,
     *,
-    default_cxsk_channel_name: str,
+    default_mams_channel_name: str,
     timeout_s: int,
     override_model: Optional[str],
     override_reasoning_effort: Optional[str],
@@ -2285,49 +2438,49 @@ def run_invoke_command(
         default_reasoning_effort=effective_default_reasoning_effort,
     )
 
-    prepared: list[tuple[InvokeRequest, CxskChannelConfig, bool, Optional[str], Optional[str]]] = []
+    prepared: list[tuple[InvokeRequest, MamsChannelConfig, bool, Optional[str], Optional[str]]] = []
     seen_channel_names: set[str] = set()
     for request in payload.requests:
-        cxsk_channel_name = request.cxsk_channel_name or default_cxsk_channel_name
-        if cxsk_channel_name in seen_channel_names:
+        mams_channel_name = request.mams_channel_name or default_mams_channel_name
+        if mams_channel_name in seen_channel_names:
             raise ValueError(
-                f"invoke does not allow duplicate cxsk_channel targets in one call: {cxsk_channel_name}"
+                f"invoke does not allow duplicate mams_channel targets in one call: {mams_channel_name}"
             )
-        seen_channel_names.add(cxsk_channel_name)
+        seen_channel_names.add(mams_channel_name)
 
-        cxsk_channel = find_cxsk_channel(config.cxsk_channels, cxsk_channel_name)
-        if cxsk_channel is None:
-            cxsk_channel = build_cxsk_channel_config(
-                cxsk_channel_name,
+        mams_channel = find_mams_channel(config.mams_channels, mams_channel_name)
+        if mams_channel is None:
+            mams_channel = build_mams_channel_config(
+                mams_channel_name,
                 model=effective_default_model,
                 reasoning_effort=effective_default_reasoning_effort,
             )
 
-        model = override_model or cxsk_channel.model or DEFAULT_MODEL
+        model = override_model or mams_channel.model or DEFAULT_MODEL
         reasoning_effort = (
             override_reasoning_effort
-            or cxsk_channel.reasoning_effort
+            or mams_channel.reasoning_effort
             or DEFAULT_REASONING_EFFORT
         )
-        turn_index = collaborative_turn_index(request.command, cxsk_channel)
+        turn_index = collaborative_turn_index(request.command, mams_channel)
         full_reminder = should_use_full_reminder(request.command, turn_index)
         prepared.append(
             (
-                replace(request, cxsk_channel_name=cxsk_channel_name),
-                cxsk_channel,
+                replace(request, mams_channel_name=mams_channel_name),
+                mams_channel,
                 full_reminder,
                 model,
                 reasoning_effort,
             )
         )
 
-    def perform(item: tuple[InvokeRequest, CxskChannelConfig, bool, Optional[str], Optional[str]]) -> InvokeSettledResult:
-        request, cxsk_channel, full_reminder, model, reasoning_effort = item
+    def perform(item: tuple[InvokeRequest, MamsChannelConfig, bool, Optional[str], Optional[str]]) -> InvokeSettledResult:
+        request, mams_channel, full_reminder, model, reasoning_effort = item
         try:
-            reply, updated_cxsk_channel = execute_command_for_cxsk_channel(
+            reply, updated_mams_channel = execute_command_for_mams_channel(
                 repo_root,
                 config,
-                cxsk_channel,
+                mams_channel,
                 command=request.command,
                 stdin_text=request.stdin_text,
                 timeout_s=timeout_s,
@@ -2340,7 +2493,7 @@ def run_invoke_command(
                 status="ok",
                 reply=reply,
                 error=None,
-                updated_cxsk_channel=updated_cxsk_channel,
+                updated_mams_channel=updated_mams_channel,
             )
         except Exception as exc:
             return InvokeSettledResult(
@@ -2348,7 +2501,7 @@ def run_invoke_command(
                 status="error",
                 reply=None,
                 error=str(exc),
-                updated_cxsk_channel=None,
+                updated_mams_channel=None,
             )
 
     use_parallel = len(prepared) > 1 and all(not is_mutating_command(item[0].command) for item in prepared)
@@ -2360,17 +2513,18 @@ def run_invoke_command(
         settled = [perform(item) for item in prepared]
         execution_mode = "sequential invoke"
 
-    updated_channels = [item.updated_cxsk_channel for item in settled if item.updated_cxsk_channel is not None]
+    updated_channels = [item.updated_mams_channel for item in settled if item.updated_mams_channel is not None]
     updated_config = (
-        persist_multiple_cxsk_channels(repo_root, config, updated_channels)
+        persist_multiple_mams_channels(repo_root, config, updated_channels)
         if updated_channels
         else config
     )
-    for updated_cxsk_channel in updated_channels:
-        try_promote_exec_session_to_cli(updated_cxsk_channel.session_id)
+    for updated_mams_channel in updated_channels:
+        if updated_mams_channel.runner == RUNNER_CODEX:
+            try_promote_exec_session_to_cli(updated_mams_channel.session_id)
 
     summary = format_invoke_summary(settled, execution_mode=execution_mode)
-    return format_output_for_cxsk_invoker(
+    return format_output_for_mams_invoker(
         repo_root,
         updated_config,
         tool="invoke",
@@ -2388,8 +2542,8 @@ def run_codex(
     timeout_s: int,
     model: Optional[str],
     reasoning_effort: Optional[str],
-) -> CodexRunResult:
-    tmp_last = Path(tempfile.mkstemp(prefix="codex-skill-last-", suffix=".txt")[1])
+) -> RunnerRunResult:
+    tmp_last = Path(tempfile.mkstemp(prefix="mad-agent-mesh-last-", suffix=".txt")[1])
     try:
         base_args = [
             "exec",
@@ -2424,13 +2578,6 @@ def run_codex(
 
         thread_id: Optional[str] = None
         stderr_lines: list[str] = []
-        last_activity_at = time.monotonic()
-        last_seen_last_output_size = -1
-        last_seen_last_output_mtime_ns = -1
-
-        def mark_activity() -> None:
-            nonlocal last_activity_at
-            last_activity_at = time.monotonic()
 
         try:
             assert proc.stdin is not None
@@ -2440,78 +2587,36 @@ def run_codex(
             proc.kill()
             raise
 
-        def drain_stdout() -> None:
+        def drain_stdout(line: str) -> None:
             nonlocal thread_id
-            assert proc.stdout is not None
-            for line in proc.stdout:
-                if line:
-                    mark_activity()
-                event = safe_json_loads(line.strip())
-                if not event:
-                    continue
-                tid = detect_thread_id(event)
-                if tid and not thread_id:
-                    thread_id = tid
+            event = safe_json_loads(line.strip())
+            if not event:
+                return
+            tid = detect_thread_id(event)
+            if tid and not thread_id:
+                thread_id = tid
 
-        def drain_stderr() -> None:
-            assert proc.stderr is not None
-            for line in proc.stderr:
-                if line:
-                    mark_activity()
-                    stderr_lines.append(line.rstrip())
+        def drain_stderr(line: str) -> None:
+            if line:
+                stderr_lines.append(line.rstrip())
 
-        stdout_thread = threading.Thread(target=drain_stdout, daemon=True)
-        stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
-        stdout_thread.start()
-        stderr_thread.start()
-
-        started_at = time.monotonic()
-
-        try:
-            while True:
-                elapsed = time.monotonic() - started_at
-                if elapsed > timeout_s:
-                    proc.kill()
-                    raise RuntimeError(f"codex timed out after {timeout_s}s")
-
-                try:
-                    stat = tmp_last.stat()
-                    if (
-                        stat.st_size != last_seen_last_output_size
-                        or stat.st_mtime_ns != last_seen_last_output_mtime_ns
-                    ):
-                        last_seen_last_output_size = stat.st_size
-                        last_seen_last_output_mtime_ns = stat.st_mtime_ns
-                        mark_activity()
-                except FileNotFoundError:
-                    pass
-
-                if time.monotonic() - last_activity_at > PROCESS_IDLE_TIMEOUT_S:
-                    proc.kill()
-                    raise RuntimeError(
-                        "codex became inactive for too long while waiting "
-                        f"(no observable activity for {PROCESS_IDLE_TIMEOUT_S}s)."
-                    )
-
-                wait_timeout = max(0.1, min(PROCESS_POLL_INTERVAL_S, timeout_s - elapsed))
-                try:
-                    rc = proc.wait(timeout=wait_timeout)
-                    break
-                except subprocess.TimeoutExpired:
-                    continue
-        except Exception:
-            proc.kill()
-            raise
-        finally:
-            stdout_thread.join(timeout=1)
-            stderr_thread.join(timeout=1)
+        rc = monitor_runner_process(
+            proc=proc,
+            timeout_s=timeout_s,
+            idle_timeout_s=PROCESS_IDLE_TIMEOUT_S,
+            activity_paths=[tmp_last],
+            on_stdout_line=drain_stdout,
+            on_stderr_line=drain_stderr,
+            timeout_label="codex",
+            inactivity_label="codex",
+        )
 
         if rc != 0:
             stderr = "\n".join(line for line in stderr_lines if line).strip()
             raise RuntimeError(stderr or f"codex exited with code {rc}")
 
         if not thread_id:
-            raise RuntimeError("Failed to detect Codex thread_id from JSONL output.")
+            raise RuntimeError("Failed to detect Codex session_id from JSONL output.")
 
         reply = ""
         try:
@@ -2519,14 +2624,160 @@ def run_codex(
         except Exception:
             reply = ""
         if not reply:
-            raise RuntimeError("Failed to read Codex last message output.")
+            raise RuntimeError("Failed to read Codex final message output.")
 
-        return CodexRunResult(session_id=thread_id, reply=reply)
+        return RunnerRunResult(session_id=thread_id, reply=reply)
     finally:
         try:
             tmp_last.unlink(missing_ok=True)  # type: ignore[call-arg]
         except Exception:
             pass
+
+
+def run_claude_code(
+    repo_root: Path,
+    session_id: Optional[str],
+    prompt: str,
+    sandbox_mode: str,
+    timeout_s: int,
+    model: Optional[str],
+    reasoning_effort: Optional[str],
+    runner_config: dict[str, object],
+) -> RunnerRunResult:
+    tmp_stream = Path(tempfile.mkstemp(prefix="mad-agent-mesh-claude-stream-", suffix=".jsonl")[1])
+    try:
+        permission_mode = resolve_claude_permission_mode(sandbox_mode, runner_config)
+        extra_args = resolve_runner_extra_args(runner_config)
+        cmd = [
+            CLAUDE_BIN,
+            "-p",
+            "--verbose",
+            "--output-format",
+            "stream-json",
+            "--permission-mode",
+            permission_mode,
+        ]
+        if model:
+            cmd += ["--model", model]
+        if reasoning_effort:
+            cmd += ["--effort", reasoning_effort]
+        if session_id:
+            cmd += ["--resume", session_id]
+        cmd.extend(extra_args)
+
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(repo_root),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+
+        detected_session_id: Optional[str] = None
+        final_reply: Optional[str] = None
+        stderr_lines: list[str] = []
+
+        try:
+            assert proc.stdin is not None
+            proc.stdin.write(prompt)
+            proc.stdin.close()
+        except Exception:
+            proc.kill()
+            raise
+
+        def drain_stdout(line: str) -> None:
+            nonlocal detected_session_id, final_reply
+            with tmp_stream.open("a", encoding="utf-8") as handle:
+                handle.write(line)
+
+            event = safe_json_loads(line.strip())
+            if not event:
+                return
+
+            sid = event.get("session_id")
+            if isinstance(sid, str) and sid and not detected_session_id:
+                detected_session_id = sid
+
+            if event.get("type") == "system" and not detected_session_id:
+                subtype = event.get("subtype")
+                if subtype == "init":
+                    raw_session_id = event.get("session_id")
+                    if isinstance(raw_session_id, str) and raw_session_id:
+                        detected_session_id = raw_session_id
+
+            if event.get("type") == "result":
+                result_text = event.get("result")
+                if isinstance(result_text, str):
+                    final_reply = result_text.strip()
+                raw_session_id = event.get("session_id")
+                if isinstance(raw_session_id, str) and raw_session_id:
+                    detected_session_id = raw_session_id
+
+        def drain_stderr(line: str) -> None:
+            if line:
+                stderr_lines.append(line.rstrip())
+
+        rc = monitor_runner_process(
+            proc=proc,
+            timeout_s=timeout_s,
+            idle_timeout_s=PROCESS_IDLE_TIMEOUT_S,
+            activity_paths=[tmp_stream],
+            on_stdout_line=drain_stdout,
+            on_stderr_line=drain_stderr,
+            timeout_label="claude-code",
+            inactivity_label="claude-code",
+        )
+
+        if rc != 0:
+            stderr = "\n".join(line for line in stderr_lines if line).strip()
+            raise RuntimeError(stderr or f"claude-code exited with code {rc}")
+
+        if not detected_session_id:
+            raise RuntimeError("Failed to detect Claude Code session_id from stream-json output.")
+        if not final_reply:
+            raise RuntimeError("Failed to read Claude Code final result from stream-json output.")
+        return RunnerRunResult(session_id=detected_session_id, reply=final_reply)
+    finally:
+        try:
+            tmp_stream.unlink(missing_ok=True)  # type: ignore[call-arg]
+        except Exception:
+            pass
+
+
+def run_runner_for_mams_channel(
+    repo_root: Path,
+    mams_channel: MamsChannelConfig,
+    session_id: Optional[str],
+    prompt: str,
+    sandbox_mode: str,
+    timeout_s: int,
+    model: Optional[str],
+    reasoning_effort: Optional[str],
+) -> RunnerRunResult:
+    if mams_channel.runner == RUNNER_CODEX:
+        return run_codex(
+            repo_root=repo_root,
+            session_id=session_id,
+            prompt=prompt,
+            sandbox_mode=sandbox_mode,
+            timeout_s=timeout_s,
+            model=model,
+            reasoning_effort=reasoning_effort,
+        )
+    if mams_channel.runner == RUNNER_CLAUDE_CODE:
+        return run_claude_code(
+            repo_root=repo_root,
+            session_id=session_id,
+            prompt=prompt,
+            sandbox_mode=sandbox_mode,
+            timeout_s=timeout_s,
+            model=model,
+            reasoning_effort=reasoning_effort,
+            runner_config=mams_channel.runner_config,
+        )
+    raise RuntimeError(f"Unsupported mams_channel runner: {mams_channel.runner}")
 
 
 def find_rollout_for_session(session_id: str) -> Optional[Path]:
@@ -2602,16 +2853,16 @@ def main() -> int:
         help="Working directory used to locate the project session root.",
     )
     shared_options.add_argument(
-        "--cxsk-channel",
-        default=DEFAULT_CXSK_CHANNEL_NAME,
-        dest="cxsk_channel",
-        help=f"Target cxsk_channel name inside {MANAGED_DIRNAME}/{CXSK_CHANNELS_FILENAME} (default: default).",
+        "--mams-channel",
+        default=DEFAULT_MAMS_CHANNEL_NAME,
+        dest="mams_channel",
+        help=f"Target mams_channel name inside {MANAGED_DIRNAME}/{MAMS_CHANNELS_FILENAME} (default: default).",
     )
-    shared_options.add_argument("--timeout-s", type=int, default=3600, help="codex exec timeout in seconds.")
+    shared_options.add_argument("--timeout-s", type=int, default=3600, help="Managed runner timeout in seconds.")
     shared_options.add_argument("--model", default=None, help="Optional model override for this call.")
     shared_options.add_argument("--reasoning-effort", default=None, help="Optional reasoning effort override for this call.")
 
-    parser = argparse.ArgumentParser(prog="codex-skill", parents=[shared_options])
+    parser = argparse.ArgumentParser(prog="mad-agent-mesh", parents=[shared_options])
 
     sub = parser.add_subparsers(dest="cmd", required=True)
     for name in TOOL_HELP:
@@ -2620,13 +2871,13 @@ def main() -> int:
     args = parser.parse_args()
     shared_args, _ = shared_options.parse_known_args(sys.argv[1:])
     args.cwd = shared_args.cwd
-    args.cxsk_channel = shared_args.cxsk_channel
+    args.mams_channel = shared_args.mams_channel
     args.timeout_s = shared_args.timeout_s
     args.model = shared_args.model
     args.reasoning_effort = shared_args.reasoning_effort
-    cxsk_channel_name = normalize_optional_string(args.cxsk_channel)
-    if not cxsk_channel_name:
-        eprint("--cxsk-channel must be a non-empty string.")
+    mams_channel_name = normalize_optional_string(args.mams_channel)
+    if not mams_channel_name:
+        eprint("--mams-channel must be a non-empty string.")
         return 2
 
     cwd_explicit = args.cwd is not None
@@ -2644,14 +2895,14 @@ def main() -> int:
     if repo_root is None:
         candidates = candidate_roots_with_managed_dir(start_cwd)
         lines = [
-            "No project Codex session root is configured.",
+            "No project Mad Agent Mesh session root is configured.",
             "Could not find an existing managed session anchor:",
-            f"  - <dir>/{MANAGED_DIRNAME}/{CXSK_CHANNELS_FILENAME}",
-            f"  - <dir>/{LEGACY_MANAGED_DIRNAME}/{CXSK_CHANNELS_FILENAME} (legacy, auto-migrated once)",
+            f"  - <dir>/{MANAGED_DIRNAME}/{MAMS_CHANNELS_FILENAME}",
+            f"  - <dir>/{LEGACY_MANAGED_DIRNAME}/{MAMS_CHANNELS_FILENAME} (legacy, auto-migrated once)",
             f"  - <dir>/{LEGACY_MANAGED_DIRNAME}/{LEGACY_SESSION_FILENAME} (legacy, auto-migrated once)",
             f"(excluding the global {MANAGED_GLOBAL_DIR} and {CLAUDE_GLOBAL_DIR} directories).",
             "",
-            "Ask the user to choose a directory to store the Codex session for this workspace.",
+            "Ask the user to choose a directory to store the managed session state for this workspace.",
         ]
         if candidates:
             lines.append(f"Candidate directories that already contain a {MANAGED_DIRNAME}/ or {LEGACY_MANAGED_DIRNAME}/ directory (closest first):")
@@ -2676,9 +2927,9 @@ def main() -> int:
             payload = parse_configure_payload(stdin_text)
             repo_root.mkdir(parents=True, exist_ok=True)
             (repo_root / MANAGED_DIRNAME).mkdir(parents=True, exist_ok=True)
-            config, _cxsk_channel, migration_notice = resolve_cxsk_channels_for_command(
+            config, _mams_channel, migration_notice = resolve_mams_channels_for_command(
                 repo_root,
-                cxsk_channel_name,
+                mams_channel_name,
                 default_model=effective_default_model,
                 default_reasoning_effort=effective_default_reasoning_effort,
             )
@@ -2690,19 +2941,19 @@ def main() -> int:
 
         lines = [
             "configure applied.",
-            f"Target cxsk_channel: {cxsk_channel_name}",
-            f"Config path: {cxsk_channels_file_path(repo_root)}",
+            f"Target mams_channel: {mams_channel_name}",
+            f"Config path: {mams_channels_file_path(repo_root)}",
         ]
-        if payload.cxsk_invoker_patch is not None:
-            lines.append("Updated: cxsk_invoker")
+        if payload.mams_invoker_patch is not None:
+            lines.append("Updated: mams_invoker")
         if payload.shared_stages_patch is not None:
             lines.append("Updated: shared_stages")
-        if payload.cxsk_channels_patch is not None:
+        if payload.mams_channels_patch is not None:
             lines.append(
-                "Updated cxsk_channels: " + ", ".join(patch["name"] for patch in payload.cxsk_channels_patch)
+                "Updated mams_channels: " + ", ".join(patch["name"] for patch in payload.mams_channels_patch)
             )
         sys.stdout.write(
-            format_output_for_cxsk_invoker(
+            format_output_for_mams_invoker(
                 repo_root,
                 updated_config,
                 tool="configure",
@@ -2727,7 +2978,7 @@ def main() -> int:
             eprint(str(exc))
             return 1
 
-        cxsk_channel_names = ", ".join(cxsk_channel.name for cxsk_channel in config.cxsk_channels) if config.cxsk_channels else "(none)"
+        mams_channel_names = ", ".join(mams_channel.name for mams_channel in config.mams_channels) if config.mams_channels else "(none)"
         if created_canonical:
             status_line = "Created a canonical managed config because no prior managed config was present."
         elif migration_notice:
@@ -2737,11 +2988,11 @@ def main() -> int:
         lines = [
             "update-config applied.",
             status_line,
-            f"Config path: {cxsk_channels_file_path(repo_root)}",
-            f"Managed cxsk_channels: {cxsk_channel_names}",
+            f"Config path: {mams_channels_file_path(repo_root)}",
+            f"Managed mams_channels: {mams_channel_names}",
         ]
         sys.stdout.write(
-            format_output_for_cxsk_invoker(
+            format_output_for_mams_invoker(
                 repo_root,
                 config,
                 tool="update-config",
@@ -2758,7 +3009,7 @@ def main() -> int:
                 run_invoke_command(
                     repo_root,
                     stdin_text,
-                    default_cxsk_channel_name=cxsk_channel_name,
+                    default_mams_channel_name=mams_channel_name,
                     timeout_s=args.timeout_s,
                     override_model=args.model,
                     override_reasoning_effort=args.reasoning_effort,
@@ -2776,32 +3027,33 @@ def main() -> int:
             payload = parse_dangerous_new_session_payload(stdin_text)
             repo_root.mkdir(parents=True, exist_ok=True)
             (repo_root / MANAGED_DIRNAME).mkdir(parents=True, exist_ok=True)
-            config, cxsk_channel, migration_notice = resolve_cxsk_channels_for_command(
+            config, mams_channel, migration_notice = resolve_mams_channels_for_command(
                 repo_root,
-                cxsk_channel_name,
+                mams_channel_name,
                 default_model=effective_default_model,
                 default_reasoning_effort=effective_default_reasoning_effort,
             )
-            previous_session_id = cxsk_channel.session_id
-            effective_model = payload.model or cxsk_channel.model or effective_default_model
+            previous_session_id = mams_channel.session_id
+            effective_model = payload.model or mams_channel.model or effective_default_model
             effective_reasoning_effort = (
                 payload.reasoning_effort
-                or cxsk_channel.reasoning_effort
+                or mams_channel.reasoning_effort
                 or effective_default_reasoning_effort
             )
-            next_description = payload.cxsk_channel_description or cxsk_channel.description
+            next_description = payload.mams_channel_description or mams_channel.description
             if payload.target_session_id:
                 current_session_id = payload.target_session_id
                 previous_session_ids = update_previous_session_ids_for_replacement(
-                    cxsk_channel.previous_session_ids,
+                    mams_channel.previous_session_ids,
                     previous_session_id,
                     current_session_id,
                 )
                 switched_to_existing = True
             else:
                 prompt = build_dangerous_new_session_prompt(payload.user_permission)
-                result = run_codex(
+                result = run_runner_for_mams_channel(
                     repo_root=repo_root,
+                    mams_channel=mams_channel,
                     session_id=None,
                     prompt=prompt,
                     sandbox_mode=SANDBOX_READ_ONLY,
@@ -2810,52 +3062,55 @@ def main() -> int:
                     reasoning_effort=effective_reasoning_effort,
                 )
                 current_session_id = result.session_id
-                try_promote_exec_session_to_cli(current_session_id)
+                if mams_channel.runner == RUNNER_CODEX:
+                    try_promote_exec_session_to_cli(current_session_id)
                 previous_session_ids = update_previous_session_ids_for_replacement(
-                    cxsk_channel.previous_session_ids,
+                    mams_channel.previous_session_ids,
                     previous_session_id,
                     current_session_id,
                 )
                 switched_to_existing = False
-            updated_cxsk_channel = build_cxsk_channel_config(
-                cxsk_channel.name,
+            updated_mams_channel = build_mams_channel_config(
+                mams_channel.name,
                 description=next_description,
-                focus=cxsk_channel.focus,
-                baseline=cxsk_channel.baseline,
-                extra_context=cxsk_channel.extra_context,
-                stage_guidance=cxsk_channel.stage_guidance,
-                can_mutate=cxsk_channel.can_mutate,
+                focus=mams_channel.focus,
+                baseline=mams_channel.baseline,
+                extra_context=mams_channel.extra_context,
+                stage_guidance=mams_channel.stage_guidance,
+                can_mutate=mams_channel.can_mutate,
+                runner=mams_channel.runner,
+                runner_config=mams_channel.runner_config,
                 session_id=current_session_id,
                 model=effective_model,
                 reasoning_effort=effective_reasoning_effort,
                 previous_session_ids=previous_session_ids,
                 reminder_turn_count=0,
             )
-            persist_cxsk_channels_for_command(repo_root, config, updated_cxsk_channel)
+            persist_mams_channels_for_command(repo_root, config, updated_mams_channel)
         except Exception as exc:
             eprint(str(exc))
             return 1
 
         lines = [
             "dangerous-new-session authorized.",
-            f"Target cxsk_channel: {cxsk_channel_name}",
+            f"Target mams_channel: {mams_channel_name}",
             (
-                f"Managed cxsk_channel now points to target session id: {current_session_id}"
+                f"Managed mams_channel now points to target session id: {current_session_id}"
                 if switched_to_existing
-                else f"Managed cxsk_channel now points to fresh session id: {current_session_id}"
+                else f"Managed mams_channel now points to fresh session id: {current_session_id}"
             ),
-            "Do not call raw `codex` directly and do not edit the managed cxsk_channel config manually.",
+            "Do not call raw runner CLIs directly and do not edit the managed mams_channel config manually.",
         ]
         if previous_session_ids:
             lines.append(
-                "Recorded previous session ids for this cxsk_channel (newest first): "
+                "Recorded previous session ids for this mams_channel (newest first): "
                 + ", ".join(previous_session_ids)
             )
         else:
-            lines.append("There was no prior managed session id for this cxsk_channel to record.")
+            lines.append("There was no prior managed session id for this mams_channel to record.")
         updated_config = read_skill_config(repo_root)
         sys.stdout.write(
-            format_output_for_cxsk_invoker(
+            format_output_for_mams_invoker(
                 repo_root,
                 updated_config,
                 tool="dangerous-new-session",
@@ -2867,9 +3122,9 @@ def main() -> int:
         return 0
 
     try:
-        config, cxsk_channel, migration_notice = resolve_cxsk_channels_for_command(
+        config, mams_channel, migration_notice = resolve_mams_channels_for_command(
             repo_root,
-            cxsk_channel_name,
+            mams_channel_name,
             default_model=effective_default_model,
             default_reasoning_effort=effective_default_reasoning_effort,
         )
@@ -2877,17 +3132,17 @@ def main() -> int:
         eprint(str(exc))
         return 1
 
-    session_id = cxsk_channel.session_id
-    model = args.model or cxsk_channel.model or DEFAULT_MODEL
-    reasoning_effort = args.reasoning_effort or cxsk_channel.reasoning_effort or DEFAULT_REASONING_EFFORT
-    turn_index = collaborative_turn_index(args.cmd, cxsk_channel)
+    session_id = mams_channel.session_id
+    model = args.model or mams_channel.model or DEFAULT_MODEL
+    reasoning_effort = args.reasoning_effort or mams_channel.reasoning_effort or DEFAULT_REASONING_EFFORT
+    turn_index = collaborative_turn_index(args.cmd, mams_channel)
     full_reminder = should_use_full_reminder(args.cmd, turn_index)
 
     try:
-        reply, updated_cxsk_channel = execute_command_for_cxsk_channel(
+        reply, updated_mams_channel = execute_command_for_mams_channel(
             repo_root,
             config,
-            cxsk_channel,
+            mams_channel,
             command=args.cmd,
             stdin_text=stdin_text,
             timeout_s=args.timeout_s,
@@ -2899,11 +3154,12 @@ def main() -> int:
         eprint(str(exc))
         return 1
 
-    persist_cxsk_channels_for_command(repo_root, config, updated_cxsk_channel)
-    try_promote_exec_session_to_cli(updated_cxsk_channel.session_id)
+    persist_mams_channels_for_command(repo_root, config, updated_mams_channel)
+    if updated_mams_channel.runner == RUNNER_CODEX:
+        try_promote_exec_session_to_cli(updated_mams_channel.session_id)
 
     sys.stdout.write(
-        format_output_for_cxsk_invoker(
+        format_output_for_mams_invoker(
             repo_root,
             config,
             tool=args.cmd,

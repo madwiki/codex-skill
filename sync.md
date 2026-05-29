@@ -17,7 +17,7 @@ Use it for:
 
 ```json
 {
-  "sync_message": "Write the cxsk_invoker's sync message here."
+  "sync_message": "Write the mams_invoker's sync message here."
 }
 ```
 
@@ -25,14 +25,14 @@ Optional:
 
 ```json
 {
-  "sync_message": "Write the cxsk_invoker's sync message here.",
+  "sync_message": "Write the mams_invoker's sync message here.",
   "fresh_user_message": "Only if the user actually said new words that matter for this sync."
 }
 ```
 
 ## Output contract
 
-Codex replies in markdown, not JSON.
+The targeted managed channel replies in markdown, not JSON.
 
 Required:
 

@@ -2,7 +2,7 @@
 
 Use this to review a submitted plan before any execution begins.
 
-This is a hard gate. The cxsk_invoker must not treat discussion as approval.
+This is a hard gate. The mams_invoker must not treat discussion as approval.
 
 ## Input contract
 
@@ -17,7 +17,7 @@ Optional:
 ```json
 {
   "plan_for_review": "Describe the intended plan here.",
-  "new_information": "Only if something changed after init or the last Codex turn.",
+  "new_information": "Only if something changed after init or the last managed-channel turn.",
   "fresh_user_message": "Only if the user actually said new words that matter for this review."
 }
 ```
@@ -36,7 +36,7 @@ or:
 approved_to_mutate: false
 ```
 
-Then Codex must include:
+Then the targeted managed channel must include:
 
 ```md
 ## Plan Review Reply
