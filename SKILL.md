@@ -54,6 +54,8 @@ Top-level fields:
 - `cxsk_channels[*].*` is cxsk_channel-side guidance. It is injected only into the currently targeted Codex prompt.
 - Wrapper-injected system guidance is labeled `Codex Skill Reminder`.
 - User-configured guidance is labeled `User Reminder`.
+- Wrapper-generated blocks are boundary-tagged with `<<<NAME.BEGIN>>> ... <<<NAME.END>>>`.
+- Block names use underscores; block state uses dotted suffixes such as `.BEGIN` and `.END`.
 - `init` always carries full reminders.
 - Ongoing turns use a 3-turn cadence per cxsk_channel: full reminder on turns 1, 4, 7, ... and brief reminder on the two turns in between.
 

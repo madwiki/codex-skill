@@ -25,8 +25,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 SKILL_ROOT = SCRIPT_DIR.parent
 PROMPTS_DIR = SKILL_ROOT / "prompts"
 
-VERBATIM_BEGIN = "<<<USER_MESSAGE_VERBATIM_BEGIN>>>"
-VERBATIM_END = "<<<USER_MESSAGE_VERBATIM_END>>>"
+USER_MESSAGE_VERBATIM_TAG = "USER_MESSAGE_VERBATIM"
 INIT_TASK_FIELD = "task_background"
 INIT_RECOVERY_FIELD = "recovery_background"
 REVIEW_PLAN_FIELD = "plan_for_review"
@@ -1348,11 +1347,20 @@ def build_reference_notice(repo_root: Path, texts: list[str]) -> list[str]:
     for rel_path, locator in references:
         token = f"[[REF:{rel_path}]]" if locator is None else f"[[REF:{rel_path}::{locator}]]"
         lines.append(f"- {token}")
-    return ["\n".join(lines)]
+    return [wrap_tagged_block("REFERENCE_NOTICE", "\n".join(lines))]
 
 
 def render_named_items(items: list[tuple[str, str]]) -> str:
     return "\n\n".join(f"### {title}\n\n{body}" for title, body in items).strip()
+
+
+def wrap_tagged_block(tag_name: str, body: str) -> str:
+    normalized = body.strip()
+    return f"<<<{tag_name}.BEGIN>>>\n{normalized}\n<<<{tag_name}.END>>>"
+
+
+def build_labeled_content_block(tag_name: str, label: str, content: str) -> str:
+    return wrap_tagged_block(tag_name, f"{label}\n{content.strip()}")
 
 
 def build_brief_user_reminder(label: str, items: list[tuple[str, str]], stage_name: str) -> str:
@@ -1587,9 +1595,12 @@ def compose_prompt(
     common_body = render_named_items(common_items)
     if common_body:
         skill_body_parts.append(common_body)
-    skill_block = "## Codex Skill Reminder ({})\n\n{}".format(
-        "Full" if full_reminder else "Brief",
-        "\n\n".join(part for part in skill_body_parts if part).strip(),
+    skill_block = wrap_tagged_block(
+        "CODEX_SKILL_REMINDER_FULL" if full_reminder else "CODEX_SKILL_REMINDER_BRIEF",
+        "## Codex Skill Reminder ({})\n\n{}".format(
+            "Full" if full_reminder else "Brief",
+            "\n\n".join(part for part in skill_body_parts if part).strip(),
+        ),
     )
 
     if full_reminder:
@@ -1598,9 +1609,12 @@ def compose_prompt(
         user_body = build_brief_user_reminder("User Reminder", agent_items, tool)
     user_block = ""
     if user_body:
-        user_block = "## User Reminder ({})\n\n{}".format(
-            "Full" if full_reminder else "Brief",
-            user_body,
+        user_block = wrap_tagged_block(
+            "USER_REMINDER_FULL" if full_reminder else "USER_REMINDER_BRIEF",
+            "## User Reminder ({})\n\n{}".format(
+                "Full" if full_reminder else "Brief",
+                user_body,
+            ),
         )
 
     ref_notice_sections = build_reference_notice(repo_root, [skill_block, user_block, *base_parts[1:]])
@@ -1627,9 +1641,12 @@ def format_output_for_cxsk_invoker(
     common_body = render_named_items(common_items)
     if common_body:
         skill_body_parts.append(common_body)
-    skill_block = "## Codex Skill Reminder ({})\n\n{}".format(
-        "Full" if full_reminder else "Brief",
-        "\n\n".join(part for part in skill_body_parts if part).strip(),
+    skill_block = wrap_tagged_block(
+        "CODEX_SKILL_REMINDER_FULL" if full_reminder else "CODEX_SKILL_REMINDER_BRIEF",
+        "## Codex Skill Reminder ({})\n\n{}".format(
+            "Full" if full_reminder else "Brief",
+            "\n\n".join(part for part in skill_body_parts if part).strip(),
+        ),
     )
 
     if full_reminder:
@@ -1638,9 +1655,12 @@ def format_output_for_cxsk_invoker(
         user_body = build_brief_user_reminder("User Reminder", cxsk_invoker_items, tool)
     user_block = ""
     if user_body:
-        user_block = "## User Reminder ({})\n\n{}".format(
-            "Full" if full_reminder else "Brief",
-            user_body,
+        user_block = wrap_tagged_block(
+            "USER_REMINDER_FULL" if full_reminder else "USER_REMINDER_BRIEF",
+            "## User Reminder ({})\n\n{}".format(
+                "Full" if full_reminder else "Brief",
+                user_body,
+            ),
         )
 
     ref_notice_sections = build_reference_notice(repo_root, [skill_block, user_block])
@@ -1652,8 +1672,7 @@ def format_output_for_cxsk_invoker(
         skill_block,
         *ref_notice_sections,
         user_block,
-        "## Codex Reply",
-        normalized_reply,
+        wrap_tagged_block("CODEX_REPLY", f"## Codex Reply\n\n{normalized_reply}"),
     ]
     return append_migration_notice("\n\n".join(part for part in parts if part), migration_notice)
 
@@ -1665,7 +1684,7 @@ def format_invoke_summary(
 ) -> str:
     completed = sum(1 for item in results if item.status == "ok")
     failed = len(results) - completed
-    lines = [
+    summary_body = [
         "## Invoke Summary",
         "",
         f"- Requests: {len(results)}",
@@ -1673,16 +1692,20 @@ def format_invoke_summary(
         f"- Failed: {failed}",
         f"- Execution mode: {execution_mode}",
     ]
+    result_blocks: list[str] = []
     for item in results:
-        lines.extend(
+        result_body = "\n".join(
             [
-                "",
                 f"## {item.request.cxsk_channel_name or DEFAULT_CXSK_CHANNEL_NAME} · {item.request.command} · {item.status}",
                 "",
                 item.reply if item.status == "ok" and item.reply is not None else f"Error: {item.error}",
             ]
-        )
-    return "\n".join(lines).strip()
+        ).strip()
+        result_blocks.append(wrap_tagged_block("INVOKE_RESULT", result_body))
+    return wrap_tagged_block(
+        "INVOKE_SUMMARY",
+        "\n\n".join(["\n".join(summary_body).strip(), *result_blocks]).strip(),
+    )
 
 
 def build_init_prompt(
@@ -1707,8 +1730,11 @@ def build_init_prompt(
         full_reminder=True,
         base_parts=[
             load_prompt_asset(prompt_name),
-            label,
-            payload.background,
+            build_labeled_content_block(
+                "TASK_BACKGROUND" if payload.mode == "task" else "RECOVERY_BACKGROUND",
+                label,
+                payload.background,
+            ),
         ],
     )
 
@@ -1726,25 +1752,20 @@ def build_review_this_plan_prompt(
     payload = parse_review_this_plan_payload(stdin_text)
     parts = [
         load_prompt_asset("review-this-plan.md"),
-        "Plan for review from the cxsk_invoker:",
-        payload.plan_for_review,
+        build_labeled_content_block("PLAN_FOR_REVIEW", "Plan for review from the cxsk_invoker:", payload.plan_for_review),
     ]
 
     if payload.new_information:
         parts.extend(
             [
-                "New information from the cxsk_invoker:",
-                payload.new_information,
+                build_labeled_content_block("NEW_INFORMATION", "New information from the cxsk_invoker:", payload.new_information),
             ]
         )
 
     if payload.fresh_user_message:
         parts.extend(
             [
-                "Fresh user message from the user (verbatim):",
-                VERBATIM_BEGIN,
-                payload.fresh_user_message,
-                VERBATIM_END,
+                wrap_tagged_block(USER_MESSAGE_VERBATIM_TAG, payload.fresh_user_message),
             ]
         )
 
@@ -1769,17 +1790,13 @@ def build_sync_prompt(
     payload = parse_sync_payload(stdin_text)
     parts = [
         load_prompt_asset("sync.md"),
-        "Sync message from the cxsk_invoker:",
-        payload.sync_message,
+        build_labeled_content_block("SYNC_MESSAGE", "Sync message from the cxsk_invoker:", payload.sync_message),
     ]
 
     if payload.fresh_user_message:
         parts.extend(
             [
-                "Fresh user message from the user (verbatim):",
-                VERBATIM_BEGIN,
-                payload.fresh_user_message,
-                VERBATIM_END,
+                wrap_tagged_block(USER_MESSAGE_VERBATIM_TAG, payload.fresh_user_message),
             ]
         )
 
@@ -1804,25 +1821,20 @@ def build_review_this_work_prompt(
     payload = parse_review_this_work_payload(stdin_text)
     parts = [
         load_prompt_asset("review-this-work.md"),
-        "Work for review from the cxsk_invoker:",
-        payload.work_for_review,
+        build_labeled_content_block("WORK_FOR_REVIEW", "Work for review from the cxsk_invoker:", payload.work_for_review),
     ]
 
     if payload.new_information:
         parts.extend(
             [
-                "New information from the cxsk_invoker:",
-                payload.new_information,
+                build_labeled_content_block("NEW_INFORMATION", "New information from the cxsk_invoker:", payload.new_information),
             ]
         )
 
     if payload.fresh_user_message:
         parts.extend(
             [
-                "Fresh user message from the user (verbatim):",
-                VERBATIM_BEGIN,
-                payload.fresh_user_message,
-                VERBATIM_END,
+                wrap_tagged_block(USER_MESSAGE_VERBATIM_TAG, payload.fresh_user_message),
             ]
         )
 
@@ -1848,26 +1860,30 @@ def build_execute_prompt(
     payload = parse_execute_payload(stdin_text, mode=mode)
     parts = [
         load_prompt_asset("execute-this-plan.md" if mode == "execute-this-plan" else "execute-this-plan-part.md"),
-        (
-            "Execution sandbox for this turn: workspace-write (default mutation sandbox)."
-            if payload.sandbox_mode == EXECUTE_SANDBOX_DEFAULT
-            else "Execution sandbox for this turn: danger-full-access (explicit full-access escalation approved by the cxsk_invoker)."
+        build_labeled_content_block(
+            "EXECUTION_SANDBOX",
+            "Execution sandbox for this turn:",
+            (
+                "workspace-write (default mutation sandbox)."
+                if payload.sandbox_mode == EXECUTE_SANDBOX_DEFAULT
+                else "danger-full-access (explicit full-access escalation approved by the cxsk_invoker)."
+            ),
         ),
-        (
-            "Approved plan from the cxsk_invoker:"
-            if mode == "execute-this-plan"
-            else "Approved plan part from the cxsk_invoker:"
+        build_labeled_content_block(
+            "APPROVED_PLAN" if mode == "execute-this-plan" else "APPROVED_PLAN_PART",
+            (
+                "Approved plan from the cxsk_invoker:"
+                if mode == "execute-this-plan"
+                else "Approved plan part from the cxsk_invoker:"
+            ),
+            payload.approved_scope,
         ),
-        payload.approved_scope,
     ]
 
     if payload.fresh_user_message:
         parts.extend(
             [
-                "Fresh user message from the user (verbatim):",
-                VERBATIM_BEGIN,
-                payload.fresh_user_message,
-                VERBATIM_END,
+                wrap_tagged_block(USER_MESSAGE_VERBATIM_TAG, payload.fresh_user_message),
             ]
         )
 

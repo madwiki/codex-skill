@@ -465,6 +465,14 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         assert capture is not None
+        self.assertIn("<<<CODEX_SKILL_REMINDER_FULL.BEGIN>>>", capture["stdin"])
+        self.assertIn("<<<CODEX_SKILL_REMINDER_FULL.END>>>", capture["stdin"])
+        self.assertIn("<<<USER_REMINDER_FULL.BEGIN>>>", capture["stdin"])
+        self.assertIn("<<<USER_REMINDER_FULL.END>>>", capture["stdin"])
+        self.assertIn("<<<REFERENCE_NOTICE.BEGIN>>>", capture["stdin"])
+        self.assertIn("<<<REFERENCE_NOTICE.END>>>", capture["stdin"])
+        self.assertIn("<<<PLAN_FOR_REVIEW.BEGIN>>>", capture["stdin"])
+        self.assertIn("<<<PLAN_FOR_REVIEW.END>>>", capture["stdin"])
         self.assertIn("## Codex Skill Reminder (Full)", capture["stdin"])
         self.assertIn("## User Reminder (Full)", capture["stdin"])
         self.assertIn("## Reference Handling Notice", capture["stdin"])
@@ -507,6 +515,10 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         self.assertNotIn("## CXSK Invoker Working Style", capture["stdin"])
         self.assertNotIn("## CXSK Invoker Stage Guidance", capture["stdin"])
         self.assertIn("### Shared Stage Guidance", capture["stdin"])
+        self.assertIn("<<<CODEX_SKILL_REMINDER_FULL.BEGIN>>>", proc.stdout)
+        self.assertIn("<<<USER_REMINDER_FULL.BEGIN>>>", proc.stdout)
+        self.assertIn("<<<CODEX_REPLY.BEGIN>>>", proc.stdout)
+        self.assertIn("<<<CODEX_REPLY.END>>>", proc.stdout)
         self.assertIn("## Codex Skill Reminder (Full)", proc.stdout)
         self.assertIn("## User Reminder (Full)", proc.stdout)
         self.assertIn("### CXSK Invoker Baseline", proc.stdout)
@@ -543,6 +555,10 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         assert capture is not None
+        self.assertIn("<<<CODEX_SKILL_REMINDER_BRIEF.BEGIN>>>", capture["stdin"])
+        self.assertIn("<<<USER_REMINDER_BRIEF.BEGIN>>>", capture["stdin"])
+        self.assertIn("<<<SYNC_MESSAGE.BEGIN>>>", capture["stdin"])
+        self.assertIn("<<<SYNC_MESSAGE.END>>>", capture["stdin"])
         self.assertIn("## Codex Skill Reminder (Brief)", capture["stdin"])
         self.assertIn("## User Reminder (Brief)", capture["stdin"])
         self.assertIn("configured User Reminder still applies".lower(), capture["stdin"].lower())
@@ -629,6 +645,7 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         assert capture is not None
         self.assertEqual(self.sandbox_from_argv(capture["argv"]), "read-only")
+        self.assertIn("<<<SYNC_MESSAGE.BEGIN>>>", capture["stdin"])
         self.assertIn("Sync message from the cxsk_invoker:", capture["stdin"])
         self.assertIn("## Plan", proc.stdout)
 
@@ -642,6 +659,8 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         assert capture is not None
         self.assertEqual(self.sandbox_from_argv(capture["argv"]), "workspace-write")
+        self.assertIn("<<<EXECUTION_SANDBOX.BEGIN>>>", capture["stdin"])
+        self.assertIn("<<<APPROVED_PLAN.BEGIN>>>", capture["stdin"])
         self.assertIn("workspace-write (default mutation sandbox)", capture["stdin"])
         self.assertIn("Approved plan from the cxsk_invoker:", capture["stdin"])
 
@@ -655,6 +674,8 @@ class CodexSkillIntegrationTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         assert capture is not None
         self.assertEqual(self.sandbox_from_argv(capture["argv"]), "danger-full-access")
+        self.assertIn("<<<EXECUTION_SANDBOX.BEGIN>>>", capture["stdin"])
+        self.assertIn("<<<APPROVED_PLAN_PART.BEGIN>>>", capture["stdin"])
         self.assertIn(
             "danger-full-access (explicit full-access escalation approved by the cxsk_invoker)",
             capture["stdin"],
@@ -712,6 +733,8 @@ class CodexSkillIntegrationTests(unittest.TestCase):
             },
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("<<<INVOKE_SUMMARY.BEGIN>>>", proc.stdout)
+        self.assertIn("<<<INVOKE_RESULT.BEGIN>>>", proc.stdout)
         self.assertIn("## Invoke Summary", proc.stdout)
         self.assertIn("reviewer-a · review-this-plan · ok", proc.stdout)
         self.assertIn("reviewer-b · review-this-plan · ok", proc.stdout)
@@ -767,6 +790,8 @@ class CodexSkillIntegrationTests(unittest.TestCase):
             },
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("<<<INVOKE_SUMMARY.BEGIN>>>", proc.stdout)
+        self.assertIn("<<<INVOKE_RESULT.BEGIN>>>", proc.stdout)
         self.assertIn("- Succeeded: 1", proc.stdout)
         self.assertIn("- Failed: 1", proc.stdout)
         self.assertIn("planner · sync · ok", proc.stdout)

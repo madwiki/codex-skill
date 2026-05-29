@@ -38,6 +38,8 @@ Important behavior:
 - `cxsk_invoker.*` is returned to the cxsk_invoker, not injected into Codex prompts.
 - `cxsk_channels[*].*` is injected only into the targeted Codex prompt.
 - `shared_stages` may be shown on both sides.
+- wrapper-generated blocks are boundary-tagged with `<<<NAME.BEGIN>>> ... <<<NAME.END>>>`
+- block names use underscores; block state uses dotted suffixes such as `.BEGIN` and `.END`
 
 ## Commands
 
