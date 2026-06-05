@@ -61,4 +61,5 @@ Successful wrapper replies also carry an Invoker-facing usage reminder:
 - The end user speaks only through the workflow caller; managed channels do not talk to the user directly.
 - Structured `## User Escalation Request` blocks are reviewed by `governor` first when a governor channel exists.
 - The governor decides whether a question should be surfaced, but it still reaches the user only through the workflow caller.
+- If no governor channel exists, a valid `## User Escalation Request` is surfaced to the workflow caller directly.
 - If a managed channel stops without a valid structured result, the wrapper retries once with a protocol notice, then writes a diagnostic file if the retry still fails.

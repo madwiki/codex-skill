@@ -797,6 +797,30 @@ class MadAgentMeshIntegrationTests(unittest.TestCase):
             proc.stdout.index("<<<CHANNEL_REPLY.BEGIN>>>"),
         )
 
+    def test_user_escalation_surfaces_directly_when_no_governor_channel_exists(self) -> None:
+        tempdir, workspace = self.create_workspace(
+            initial_config=self.build_config(
+                [
+                    self.build_channel("default", session_id="executor-session"),
+                ]
+            )
+        )
+        self.addCleanup(tempdir.cleanup)
+
+        proc, _captures, _state = self.run_in_workspace(
+            workspace,
+            "execute-this-plan",
+            '{"approved_plan":"Execute the plan."}',
+            "## Work Report\n\nDid the work.\n\n## User Escalation Request\n\nblocking: false\nquestion: Ask the user directly?\nreason: Need product direction.\n",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("<<<USER_ESCALATION_REQUEST.BEGIN>>>", proc.stdout)
+        self.assertNotIn("<<<GOVERNOR_REVIEW.BEGIN>>>", proc.stdout)
+        self.assertLess(
+            proc.stdout.index("<<<USER_ESCALATION_REQUEST.BEGIN>>>"),
+            proc.stdout.index("<<<CHANNEL_REPLY.BEGIN>>>"),
+        )
+
     def test_invoke_result_preserves_governor_then_user_escalation_order(self) -> None:
         tempdir, workspace = self.create_workspace(
             initial_config=self.build_config(
