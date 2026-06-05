@@ -1,44 +1,26 @@
 # review-this-plan
 
-Use this to review a submitted plan before any execution begins.
+Hard gate before execution begins.
 
-This is a hard gate. The mams_invoker must not treat discussion as approval.
-
-## Input contract
+## Input
 
 ```json
 {
-  "plan_for_review": "Describe the intended plan here."
+  "plan_for_review": "Submitted plan text.",
+  "new_information": "Optional. Additional facts discovered after the plan was drafted.",
+  "fresh_user_message": "Optional. A fresh user verbatim message."
 }
 ```
 
-Optional:
-
-```json
-{
-  "plan_for_review": "Describe the intended plan here.",
-  "new_information": "Only if something changed after init or the last managed-channel turn.",
-  "fresh_user_message": "Only if the user actually said new words that matter for this review."
-}
-```
-
-## Output contract
+## Required reply shape
 
 The first non-empty line must be:
 
-```md
-approved_to_mutate: true
-```
+- `approved_to_mutate: true`
+- or `approved_to_mutate: false`
 
-or:
+Then the reply must include:
 
-```md
-approved_to_mutate: false
-```
+- `## Plan Review Reply`
 
-Then the targeted managed channel must include:
-
-```md
-## Plan Review Reply
-...
-```
+An optional `## User Escalation Request` section may be included alongside the valid review reply.

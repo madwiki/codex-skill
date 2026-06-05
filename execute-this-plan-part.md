@@ -1,32 +1,23 @@
 # execute-this-plan-part
 
-Use this to authorize one approved plan part on a mams_channel with `can_mutate: true`.
+Execute one approved plan part on a mutate-capable channel.
 
-Use this only when the full plan is genuinely too large for one execution turn.
+Use this only when the full plan is genuinely too large for one execution turn. The approved part must still be substantial.
 
-## Input contract
-
-```json
-{
-  "approved_plan_part": "Describe the approved plan part here."
-}
-```
-
-Optional:
+## Input
 
 ```json
 {
-  "approved_plan_part": "Describe the approved plan part here.",
-  "fresh_user_message": "Only if the user actually said new words that matter for this execution.",
-  "sandbox_mode": "full-access"
+  "approved_plan_part": "Approved plan part text.",
+  "fresh_user_message": "Optional. A fresh user verbatim message.",
+  "sandbox_mode": "default"
 }
 ```
 
-Rules:
+## Required reply shape
 
-- `approved_plan_part` is required
-- `sandbox_mode` may only be `default` or `full-access`
-- if the selected mams_channel has `can_mutate: false`, the wrapper rejects this command
-- a plan part must still be a substantial coherent chunk, not a tiny fragment
-- do not stop for incidental small edits
-- stop only when the approved plan part is complete or a real blocker prevents safe continuation
+When the turn stops, the reply must include:
+
+- `## Work Report`
+
+An optional `## User Escalation Request` section may be included alongside the valid work report.

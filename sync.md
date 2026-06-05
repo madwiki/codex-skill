@@ -1,49 +1,22 @@
 # sync
 
-Use this as the general sync and coordination command.
+Use `sync` for managed discussion turns.
 
-Use it for:
+This command is read-only. It is not approval and not mutation permission.
 
-- routine coordination
-- discussion and clarification
-- plan repair
-- disagreement handling
-- relaying review outcomes
-- escalating a blocker back to the planner or executor
-
-`sync` does not authorize mutation.
-
-## Input contract
+## Input
 
 ```json
 {
-  "sync_message": "Write the mams_invoker's sync message here."
+  "sync_message": "Discussion / clarification / review relay / plan repair context.",
+  "fresh_user_message": "Optional. A fresh user verbatim message.",
+  "stage_context": "plan"
 }
 ```
 
-Optional:
+`stage_context` may be:
 
-```json
-{
-  "sync_message": "Write the mams_invoker's sync message here.",
-  "fresh_user_message": "Only if the user actually said new words that matter for this sync."
-}
-```
+- `plan`
+- `execution`
 
-## Output contract
-
-The targeted managed channel replies in markdown, not JSON.
-
-Required:
-
-```md
-## Discussion Reply
-...
-```
-
-Optional when a revised or newly proposed plan is genuinely ready:
-
-```md
-## Plan
-...
-```
+It controls which configured stage prompt block is injected for the target channel.
