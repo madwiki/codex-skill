@@ -1,12 +1,14 @@
 ---
 name: mad-agent-mesh
 description: >
-  Use /mad-agent-mesh to coordinate one or more managed MAMS channels through the wrapper commands.
+  Use $mad-agent-mesh to coordinate one or more managed MAMS channels through the wrapper commands.
 ---
 
 # mad-agent-mesh
 
 This skill manages runner-backed channels stored in `<repo>/.mad-agent-mesh/mams_channels.json`.
+
+Explicit skill invocation uses `$mad-agent-mesh`, not a slash command.
 
 ## Core rules
 
