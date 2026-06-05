@@ -1,118 +1,125 @@
 ---
-name: codex-skill
+name: mad-agent-mesh
 description: >
-  Use /codex-skill to coordinate with one or more managed Codex cxsk_channels.
-  Run init on every new shared task and after compact/context clear when shared context needs to be re-established.
+  Use /mad-agent-mesh to coordinate one or more managed MAMS channels through the wrapper commands.
 ---
 
-# codex-skill
+# mad-agent-mesh
 
-This skill is cxsk_invoker-agnostic. The cxsk_invoker may be Claude Code, Codex, OpenCode, or another tool that invokes the wrapper commands. Codex does not speak to the end user directly. The cxsk_invoker remains responsible for user-facing conversation and for asking the user to decide unresolved issues.
+This skill manages runner-backed channels stored in `<repo>/.mad-agent-mesh/mams_channels.json`.
 
-Session continuity is wrapper-managed. Use only `bin/codex-skill-*` commands. Do not call raw `codex` directly. Do not manually edit, delete, or replace `<repo>/.codex-skill/cxsk_channels.json`.
+## Core rules
+
+- Use wrapper commands only. Do not call raw runner CLIs directly.
+- Do not manually edit or replace `<repo>/.mad-agent-mesh/mams_channels.json`.
+- The end user speaks only through the workflow caller. Managed channels do not talk to the user directly.
+- Session continuity is managed per channel slot through the wrapper.
+- As the workflow caller, do not modify code directly and do not give your own business or implementation judgment. Route all actual work through this skill.
 
 ## Managed config
 
-The managed config lives at `<repo>/.codex-skill/cxsk_channels.json`.
+The canonical config is:
+
+`<repo>/.mad-agent-mesh/mams_channels.json`
 
 Top-level fields:
 
-- `cxsk_invoker`
-- `shared_stages`
-- `cxsk_channels`
+- `version`
+- `mams_channels`
+- `updated_at`
 
-`cxsk_invoker` may store:
-
-- `baseline`
-- `working_style`
-- `extra_context`
-- `stage_guidance`
-- `can_mutate`
-
-`cxsk_channels[*]` may store:
+Each `mams_channels[*]` entry may store:
 
 - `name`
-- `description`
-- `focus`
-- `baseline`
-- `extra_context`
-- `stage_guidance`
+- `prompt_profile`
+  - `public`
+  - `plan_stage`
+  - `execution_stage`
 - `can_mutate`
+- `runner`
+- `runner_config`
 - `session_id`
 - `model`
 - `reasoning_effort`
 - `previous_session_ids`
+- `last_stage_context`
+- `stage_reminder_turn_count`
+- `updated_at`
 
-`cxsk_invoker.can_mutate` is a reminder field only. The wrapper cannot enforce it because the cxsk_invoker is outside the managed Codex runtime.
+`prompt_profile` is user-configured business guidance:
 
-`cxsk_channels[*].can_mutate` is enforced. Only cxsk_channels with `can_mutate: true` may use `execute-this-plan` or `execute-this-plan-part`.
+- `public` always applies
+- `plan_stage` applies on plan-oriented turns
+- `execution_stage` applies on execution-oriented turns
 
-## Injection boundaries
+The wrapper injects built-in workflow prompts per command. Those built-in prompts are always injected in full.
 
-- `cxsk_invoker.*` is cxsk_invoker-side guidance. It is returned to the cxsk_invoker in wrapper output and is not injected into Codex prompts.
-- `shared_stages` is common stage guidance. It may be shown on both sides.
-- `cxsk_channels[*].*` is cxsk_channel-side guidance. It is injected only into the currently targeted Codex prompt.
-- Wrapper-injected system guidance is labeled `Codex Skill Reminder` and may use full or brief form.
-- User-configured guidance is labeled `User Reminder` and remains the full configured content.
-- Wrapper-generated blocks are boundary-tagged with `<<<NAME.BEGIN>>> ... <<<NAME.END>>>`.
-- Block names use underscores; block state uses dotted suffixes such as `.BEGIN` and `.END`.
-- `init` always carries the full Codex Skill Reminder and the full User Reminder.
-- Ongoing turns use a 3-turn cadence only for the Codex Skill Reminder: full on turns 1, 4, 7, ... and brief on the two turns in between.
-- The User Reminder always remains the full configured content; the Codex Skill Reminder brief form explicitly reminds that the full User Reminder still applies.
+The wrapper injects configured channel guidance with a stage cadence:
 
-## References
+- first turn in a stage for a session: full
+- then `full / brief / brief / full ...`
+- switching stages resets the cadence for the new stage
+- replacing the session resets the stage cadence
 
-Use the unified format `[[REF:<relative-path>]]` or `[[REF:<relative-path>::<locator>]]` when a guidance block needs to point at a large file instead of repeating full content.
+When a wrapper command accepts `fresh_user_message`, that message is injected into the managed channel prompt verbatim as `USER_MESSAGE_VERBATIM`. The wrapper caller may lightly normalize transcription noise before sending it, but the managed channel receives the caller's provided wording, not a wrapper-generated paraphrase.
 
-- Prefer direct narrative text for short or medium guidance.
-- Use `[[REF:...]]` only when the underlying material is large enough that repeating it every turn would waste context.
-- The cxsk_invoker decides when to keep content inline and when to switch to `[[REF:...]]`.
-- The wrapper never inlines referenced files automatically.
-- If continuity loss means Codex cannot confidently identify the referenced source and relevant content, Codex must re-read the referenced file before relying on it.
+The wrapper also injects an Invoker-facing usage reminder into successful wrapper replies:
 
-`.codex-skill/refs/` is the conventional place for long Codex Skill reference documents, but any workspace file may be referenced with the same syntax.
+- first reply: full
+- then `brief / brief / full ...`
+- the cadence is global across successful wrapper replies, not tied to one specific command
+- the full reminder re-states that the caller is only the workflow messenger and must route work through this skill
+- the brief reminder says the full reminder still applies
+- the reminder also tells the caller to re-read `SKILL.md` after compaction or when the operating pattern is unclear
 
-## Review and disagreement discipline
+## Wrapper output contract
 
-- Discuss before state-changing work until the next step is clear enough that both sides can defend it from evidence.
-- Personally fact-check important claims instead of trusting summaries.
-- Review whole-system coherence, not only the local edit idea.
-- If either side raises or continues a disagreement, it must include evidence and citations when possible:
-  - relevant files
-  - relevant docs
-  - line ranges when available
-- Without evidence, a point should be framed only as `concern`, `hypothesis`, or `needs verification`, not as a settled blocker.
-- Ask the user only when a real unresolved disagreement between the cxsk_invoker and Codex has persisted for about 10 turns on the same issue.
+Invoker should read successful wrapper replies in this order:
+
+1. `INVOKER_SKILL_USAGE_*`
+2. optional `GOVERNOR_REVIEW`
+3. optional `USER_ESCALATION_REQUEST`
+4. `CHANNEL_REPLY`
+
+Meaning:
+
+- `GOVERNOR_REVIEW` is governance guidance for Invoker, not a direct user message
+- `USER_ESCALATION_REQUEST` is the user-facing question only after governor review allows it
+- `CHANNEL_REPLY` is still the managed channel's actual reply body
+
+For `invoke`, the same rule holds inside the returned `INVOKE_SUMMARY`:
+
+- each `INVOKE_RESULT` may contain its own optional `GOVERNOR_REVIEW`
+- then its own optional `USER_ESCALATION_REQUEST`
+- both still sit inside the overall caller-facing wrapper output
+
+## Typical caller round-trip
+
+When a managed channel needs user input:
+
+1. run the wrapper command normally
+2. inspect optional `GOVERNOR_REVIEW`
+3. if a `USER_ESCALATION_REQUEST` is present after that review, surface the question to the user
+4. take the user's answer and send it back through the next wrapper command as `fresh_user_message`
+5. let the wrapper resume the managed session; do not replace the session unless the user explicitly authorizes `dangerous-new-session`
 
 ## Commands
 
-Use only one command per current workflow need.
-
 | Situation | Guide |
 | --- | --- |
-| Replace or switch the current managed session for a cxsk_channel after explicit user authorization | `dangerous-new-session.md` |
-| Patch cxsk_invoker guidance, shared stage guidance, or cxsk_channel metadata | `configure.md` |
-| Normalize existing managed state and rewrite the canonical config | `update-config.md` |
-| Bootstrap a new shared task or recover after compact/context clear | `init.md` |
-| Drive one or more cxsk_channel calls through one blocking wrapper call | `invoke.md` |
-| General discussion, coordination, disagreement handling, or review relay | `sync.md` |
-| Review a submitted plan before any execution begins | `review-this-plan.md` |
-| Review completed execution work before treating it as accepted or delivered | `review-this-work.md` |
-| Execute one approved whole plan on a mutate-capable cxsk_channel | `execute-this-plan.md` |
-| Execute one approved plan part on a mutate-capable cxsk_channel | `execute-this-plan-part.md` |
+| Drive one or more channel calls through one blocking wrapper call | `invoke.md` |
+| General discussion / clarification / plan repair / review relay | `sync.md` |
+| Review a submitted plan before execution | `review-this-plan.md` |
+| Review completed execution work | `review-this-work.md` |
+| Execute one approved whole plan | `execute-this-plan.md` |
+| Execute one approved plan part | `execute-this-plan-part.md` |
+| Patch channel metadata and prompt profiles | `configure.md` |
+| Replace or switch the managed session for a channel after explicit user authorization | `dangerous-new-session.md` |
 
-## Command model
+## Notes
 
-- `init` is collaboration bootstrap only. It is not mutation.
-- `invoke` is the preferred blocking wrapper entrypoint when the cxsk_invoker wants one or more cxsk_channel calls and does not want to poll.
-- `sync` is coordination only. It is not approval and not mutation permission.
-- `review-this-plan` is a hard gate before execution begins.
-- `review-this-work` is a hard gate before accepted delivery.
-- `execute-this-plan` is the whole-plan execution turn for a mutate-capable cxsk_channel.
-- `execute-this-plan-part` is the plan-part execution turn for a mutate-capable cxsk_channel, and should be used only when the full plan is genuinely too large for one turn.
-
-## Paths
-
-- `<skill_root>` = the directory containing this `SKILL.md` (common: `~/.claude/skills/codex-skill`)
-- Guides live directly under `<skill_root>`.
-- Commands live under `<skill_root>/bin/`.
+- `invoke` is the preferred blocking wrapper entrypoint.
+- Read-only `invoke` requests fan out concurrently.
+- Any mutating `invoke` request forces sequential execution.
+- If a managed channel returns a structured `## User Escalation Request` and a `governor` channel exists, the wrapper asks the governor to decide whether that request should actually be surfaced.
+- If a managed channel ends a turn without a valid structured result, the wrapper retries once in the same session with an explicit protocol notice. If the retry still fails, the wrapper writes a diagnostic file under `<repo>/.mad-agent-mesh/diagnostics/`.

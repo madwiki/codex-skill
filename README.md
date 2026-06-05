@@ -1,75 +1,65 @@
-# codex-skill
+# mad-agent-mesh
 
-A cxsk_invoker-facing skill that lets the cxsk_invoker collaborate with one or more managed Codex cxsk_channels.
+`mad-agent-mesh` is a wrapper around managed runner-backed channels.
 
-Main branch currently supports:
+From the caller's point of view, this repository is a skill:
 
-- cxsk_invoker-agnostic invocation
-- Codex-managed cxsk_channels
-- per-cxsk_channel `can_mutate`
-- cxsk_invoker-side and cxsk_channel-side reminders
-- managed session continuity
+- the caller is only the workflow messenger and user-facing entrypoint
+- the caller must not modify code directly
+- the caller must not substitute its own business / planning / review / implementation judgment
+- all actual work must be routed through the wrapper commands in this skill
 
-Main branch does **not** yet support non-Codex runners.
+Current command surface:
 
-## Install
-
-```bash
-mkdir -p ~/.claude/skills
-git clone https://github.com/madwiki/codex-skill ~/.claude/skills/codex-skill
-```
+- `bin/invoke`
+- `bin/sync`
+- `bin/review-this-plan`
+- `bin/review-this-work`
+- `bin/execute-this-plan`
+- `bin/execute-this-plan-part`
+- `bin/configure`
+- `bin/dangerous-new-session`
 
 ## Config
 
-The managed config lives at:
+Managed state lives at:
 
-`<repo>/.codex-skill/cxsk_channels.json`
+`<repo>/.mad-agent-mesh/mams_channels.json`
 
-Top-level keys:
+Only canonical config is supported. There is no legacy migration path.
 
-- `cxsk_invoker`
-- `shared_stages`
-- `cxsk_channels`
+Each managed channel stores:
 
-Important behavior:
+- runner metadata
+- prompt profile
+- current session id
+- previous session ids
+- stage reminder state
 
-- `cxsk_invoker.can_mutate` is reminder-only.
-- `cxsk_channels[*].can_mutate` is enforced for `execute-this-plan` and `execute-this-plan-part`.
-- `cxsk_invoker.*` is returned to the cxsk_invoker, not injected into Codex prompts.
-- `cxsk_channels[*].*` is injected only into the targeted Codex prompt.
-- `shared_stages` may be shown on both sides.
-- wrapper-generated blocks are boundary-tagged with `<<<NAME.BEGIN>>> ... <<<NAME.END>>>`
-- block names use underscores; block state uses dotted suffixes such as `.BEGIN` and `.END`
+`prompt_profile` has three user-configured blocks:
 
-## Commands
+- `public`
+- `plan_stage`
+- `execution_stage`
 
-- `bin/codex-skill-init`
-- `bin/codex-skill-invoke`
-- `bin/codex-skill-sync`
-- `bin/codex-skill-review-this-plan`
-- `bin/codex-skill-review-this-work`
-- `bin/codex-skill-execute-this-plan`
-- `bin/codex-skill-execute-this-plan-part`
-- `bin/codex-skill-configure`
-- `bin/codex-skill-update-config`
-- `bin/codex-skill-dangerous-new-session`
+Built-in workflow prompts are injected per command.
+Configured channel guidance is injected per stage with a cadence tied to `session × stage`.
 
-All commands accept optional `--cxsk-channel <name>`. When omitted, the wrapper uses the `default` cxsk_channel.
+Successful wrapper replies also carry an Invoker-facing usage reminder:
 
-Preferred calling pattern:
-
-- use `invoke` when you want one blocking wrapper call that waits for one or more cxsk_channel results
-- let `invoke` wait internally instead of wrapping raw `codex-skill-*` commands in external polling
-- if all requests are read-only, `invoke` will fan them out concurrently and return the settled results together
-- if any request mutates, `invoke` will still use one wrapper call, but it will run those requests sequentially
-
-Use:
-
-- `configure` when you want to patch cxsk_invoker guidance, shared guidance, or cxsk_channel metadata with explicit JSON fields
-- `update-config` when you want the wrapper to read whatever managed state already exists, normalize it, and rewrite the canonical config at `.codex-skill/cxsk_channels.json`
+- first reply: full
+- then `brief / brief / full ...`
+- the cadence is global across successful wrapper replies
+- the full reminder re-states that the caller must route all work through this skill
+- the brief reminder says the full reminder still applies
+- both variants remind the caller to re-read `SKILL.md` after compaction or when the operating pattern is unclear
 
 ## Notes
 
-- Use wrapper commands only. Do not call raw `codex` directly.
-- Do not manually edit or delete the managed config.
-- Legacy config is auto-migrated on first use.
+- Use wrapper commands only.
+- Do not manually edit the managed config.
+- The end user speaks only through the workflow caller; managed channels do not talk to the user directly.
+- Structured `## User Escalation Request` blocks are reviewed by `governor` first when a governor channel exists.
+- The governor decides whether a question should be surfaced, but it still reaches the user only through the workflow caller.
+- If no governor channel exists, a valid `## User Escalation Request` is surfaced to the workflow caller directly.
+- If a managed channel stops without a valid structured result, the wrapper retries once with a protocol notice, then writes a diagnostic file if the retry still fails.

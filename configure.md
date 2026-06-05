@@ -1,49 +1,47 @@
 # configure
 
-Use this command when the cxsk_invoker needs to update the managed config instead of editing `.codex-skill/cxsk_channels.json` by hand.
+Use `configure` to patch managed channel metadata instead of editing `.mad-agent-mesh/mams_channels.json` by hand.
 
-This command does **not** mutate task files and does **not** change current session continuity by itself.
+This command does not mutate task files and does not change session continuity by itself.
 
 ## What it can update
 
-- top-level `cxsk_invoker`
-- top-level `shared_stages`
-- cxsk_channel metadata inside `cxsk_channels`
+- `mams_channels[*].prompt_profile`
+- `mams_channels[*].can_mutate`
+- `mams_channels[*].runner`
+- `mams_channels[*].runner_config`
+- `mams_channels[*].model`
+- `mams_channels[*].reasoning_effort`
 
-Cxsk Channel patches are applied by `name`. If the named cxsk_channel does not exist yet, this command creates it with empty continuity and the provided metadata.
-
-Important fields:
-
-- `cxsk_invoker.can_mutate`: reminder-only
-- `cxsk_channels[].can_mutate`: enforced by `execute-this-plan` and `execute-this-plan-part`
+Channel patches are applied by `name`. If a named channel does not exist yet, this command creates it.
 
 ## Input contract
 
 ```json
 {
-  "cxsk_invoker": {
-    "baseline": "Optional. Non-empty string or null.",
-    "working_style": "Optional. Non-empty string or null.",
-    "extra_context": "Optional. Non-empty string or null.",
-    "stage_guidance": {
-      "review-this-plan": "Optional. Non-empty string or null."
-    },
-    "can_mutate": false
-  },
-  "shared_stages": {
-    "sync": "Optional. Non-empty string or null."
-  },
-  "cxsk_channels": [
+  "mams_channels": [
     {
       "name": "reviewer-a",
-      "description": "Optional. Non-empty string or null.",
-      "focus": "Optional. Non-empty string or null.",
-      "baseline": "Optional. Non-empty string or null.",
-      "extra_context": "Optional. Non-empty string or null.",
-      "stage_guidance": {
-        "review-this-plan": "Optional. Non-empty string or null."
+      "prompt_profile": {
+        "public": {
+          "description": "Optional. Non-empty string or null.",
+          "focus": "Optional. Non-empty string or null.",
+          "baseline": "Optional. Non-empty string or null.",
+          "extra_context": "Optional. Non-empty string or null."
+        },
+        "plan_stage": {
+          "baseline": "Optional. Non-empty string or null."
+        },
+        "execution_stage": {
+          "baseline": "Optional. Non-empty string or null."
+        }
       },
       "can_mutate": false,
+      "runner": "codex",
+      "runner_config": {
+        "permission_mode": "Optional. Claude Code only.",
+        "extra_args": ["Optional extra runner CLI args."]
+      },
       "model": "Optional. Non-empty string or null.",
       "reasoning_effort": "Optional. Non-empty string or null."
     }
@@ -53,12 +51,11 @@ Important fields:
 
 Rules:
 
+- `mams_channels` is required
+- `mams_channels[].name` is required
 - omitted fields stay unchanged
-- `null` clears configurable text fields or removes stage-guidance entries
-- `cxsk_channels[].name` is required
+- `null` clears configurable text fields
 - `can_mutate` must be a boolean when provided
+- `runner` must be `codex` or `claude-code` when provided
+- `runner_config` must be a JSON object when provided
 - `configure` does not accept direct `session_id` edits
-
-## References
-
-Use `[[REF:<relative-path>]]` or `[[REF:<relative-path>::<locator>]]` for large external guidance.

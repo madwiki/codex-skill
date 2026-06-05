@@ -1,31 +1,26 @@
 # execute-this-plan
 
-Use this to authorize one approved plan on a cxsk_channel with `can_mutate: true`.
+Execute one approved whole plan on a mutate-capable channel.
 
-Use this when the approved plan is reasonably sized and should be executed as one substantial unit. Do not use plan-part mode unless the full plan is genuinely too large for one execution turn.
-
-## Input contract
+## Input
 
 ```json
 {
-  "approved_plan": "Describe the approved plan here."
+  "approved_plan": "Approved plan text.",
+  "fresh_user_message": "Optional. A fresh user verbatim message.",
+  "sandbox_mode": "default"
 }
 ```
 
-Optional:
+`sandbox_mode` may be:
 
-```json
-{
-  "approved_plan": "Describe the approved plan here.",
-  "fresh_user_message": "Only if the user actually said new words that matter for this execution.",
-  "sandbox_mode": "full-access"
-}
-```
+- `default`
+- `full-access`
 
-Rules:
+## Required reply shape
 
-- `approved_plan` is required
-- `sandbox_mode` may only be `default` or `full-access`
-- if the selected cxsk_channel has `can_mutate: false`, the wrapper rejects this command
-- do not stop for trivial progress or incidental tiny edits
-- finish the approved plan unless a real blocker prevents safe continuation
+When the turn stops, the reply must include:
+
+- `## Work Report`
+
+An optional `## User Escalation Request` section may be included alongside the valid work report.

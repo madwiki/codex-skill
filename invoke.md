@@ -1,33 +1,34 @@
 # invoke
 
-Use `invoke` as the preferred wrapper command when the cxsk_invoker wants one blocking call that drives one or more cxsk_channels and waits for settled results.
+Use `invoke` when you want one blocking wrapper call that drives one or more managed channels and waits for settled results.
 
-## When to use it
+## Accepted commands
 
-- one long `sync`
-- one long `review-this-plan`
-- one long `review-this-work`
-- fanout to multiple reviewers or planners without external polling
-- a single execution call when you still want the same blocking wrapper entrypoint
+- `sync`
+- `review-this-plan`
+- `review-this-work`
+- `execute-this-plan`
+- `execute-this-plan-part`
 
-## Why use it
+## Rules
 
-- the wrapper blocks once and waits internally
-- read-only fanout can run concurrently
-- mutating requests still run through the same wrapper entrypoint
-- the cxsk_invoker does not need to poll for status
-- the wrapper watches process health while waiting
+- if all requests are read-only, `invoke` runs them concurrently
+- if any request mutates, `invoke` runs all requests sequentially
+- do not target the same channel twice in one `invoke` call
+- the wrapper reply may prepend an Invoker-facing skill-usage reminder block; treat it as caller guidance, not as managed channel output
+- inside the wrapper output, read blocks in order:
+  - `INVOKER_SKILL_USAGE_*`
+  - `CHANNEL_REPLY`
+  - then inside `INVOKE_SUMMARY`, each `INVOKE_RESULT` may contain optional `GOVERNOR_REVIEW` and optional `USER_ESCALATION_REQUEST`
 
 ## Input
-
-`invoke` reads JSON from stdin.
 
 Single request:
 
 ```json
 {
   "command": "review-this-plan",
-  "cxsk_channel": "reviewer-a",
+  "mams_channel": "reviewer-a",
   "input": {
     "plan_for_review": "..."
   }
@@ -41,56 +42,18 @@ Multiple requests:
   "requests": [
     {
       "command": "review-this-plan",
-      "cxsk_channel": "reviewer-a",
+      "mams_channel": "reviewer-a",
       "input": {
         "plan_for_review": "..."
       }
     },
     {
       "command": "review-this-plan",
-      "cxsk_channel": "reviewer-b",
+      "mams_channel": "reviewer-b",
       "input": {
         "plan_for_review": "..."
       }
     }
   ]
 }
-```
-
-## Rules
-
-- `invoke` accepts:
-  - `init`
-  - `sync`
-  - `review-this-plan`
-  - `review-this-work`
-  - `execute-this-plan`
-  - `execute-this-plan-part`
-- if all requests are read-only, `invoke` fans them out concurrently
-- if any request is mutating, `invoke` runs the requests sequentially
-- do not target the same `cxsk_channel` twice in one `invoke` call
-
-## Usage
-
-```bash
-bin/codex-skill-invoke --cwd <repo> <<'JSON'
-{
-  "requests": [
-    {
-      "command": "sync",
-      "cxsk_channel": "planner",
-      "input": {
-        "sync_message": "..."
-      }
-    },
-    {
-      "command": "review-this-plan",
-      "cxsk_channel": "reviewer-a",
-      "input": {
-        "plan_for_review": "..."
-      }
-    }
-  ]
-}
-JSON
 ```
