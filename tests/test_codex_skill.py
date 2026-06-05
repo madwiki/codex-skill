@@ -492,6 +492,71 @@ class MadAgentMeshIntegrationTests(unittest.TestCase):
         self.assertIn("<<<USER_MESSAGE_VERBATIM.BEGIN>>>", prompt)
         self.assertIn(user_message, prompt)
 
+    def test_user_escalation_round_trip_reuses_session_and_relays_user_reply_verbatim(self) -> None:
+        tempdir, workspace = self.create_workspace(
+            initial_config=self.build_config(
+                [
+                    self.build_channel("default", session_id="executor-session"),
+                    self.build_channel("governor", session_id="governor-session"),
+                ]
+            )
+        )
+        self.addCleanup(tempdir.cleanup)
+
+        first_proc, first_captures, first_state = self.run_in_workspace(
+            workspace,
+            "execute-this-plan",
+            json.dumps(
+                {
+                    "approved_plan": "Execute the approved plan.",
+                },
+                ensure_ascii=False,
+            ),
+            "## Work Report\n\nDid the work.\n\n## User Escalation Request\n\nblocking: false\nquestion: Should we keep the fallback path?\nreason: Need product direction.\n",
+            env_extra={
+                "FAKE_CHANNEL_REPLY_MAP": json.dumps(
+                    {
+                        "Originating managed channel:": "escalate_to_user: true\n\n## Governor Review Reply\n\nSurface the product tradeoff to the user.",
+                    },
+                    ensure_ascii=False,
+                )
+            },
+        )
+        self.assertEqual(first_proc.returncode, 0, first_proc.stderr)
+        self.assertIn("<<<GOVERNOR_REVIEW.BEGIN>>>", first_proc.stdout)
+        self.assertIn("<<<USER_ESCALATION_REQUEST.BEGIN>>>", first_proc.stdout)
+        self.assertLess(
+            first_proc.stdout.index("<<<GOVERNOR_REVIEW.BEGIN>>>"),
+            first_proc.stdout.index("<<<USER_ESCALATION_REQUEST.BEGIN>>>"),
+        )
+        self.assertEqual(len(first_captures), 2)
+        self.assertIn("resume", first_captures[0]["argv"])
+        self.assertIn("executor-session", first_captures[0]["argv"])
+        default_channel = self.find_channel(first_state, "default")
+        self.assertEqual(default_channel["session_id"], "executor-session")
+
+        user_answer = "用户答复：保留 fallback，但不要继续扩 scope。"
+        second_proc, second_captures, _second_state = self.run_in_workspace(
+            workspace,
+            "sync",
+            json.dumps(
+                {
+                    "sync_message": "Continue after the user answered the escalation question.",
+                    "fresh_user_message": user_answer,
+                    "stage_context": "execution",
+                },
+                ensure_ascii=False,
+            ),
+            "## Discussion Reply\n\nKeep the fallback and stay within the existing scope.",
+        )
+        self.assertEqual(second_proc.returncode, 0, second_proc.stderr)
+        self.assertGreaterEqual(len(second_captures), 1)
+        self.assertIn("resume", second_captures[-1]["argv"])
+        self.assertIn("executor-session", second_captures[-1]["argv"])
+        second_prompt = second_captures[-1]["stdin"]
+        self.assertIn("<<<USER_MESSAGE_VERBATIM.BEGIN>>>", second_prompt)
+        self.assertIn(user_answer, second_prompt)
+
     def test_invoker_skill_usage_reminder_uses_full_then_brief_cadence(self) -> None:
         tempdir, workspace = self.create_workspace(
             initial_config=self.build_config([self.build_channel("default", session_id="existing")])

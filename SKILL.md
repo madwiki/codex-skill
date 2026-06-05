@@ -93,6 +93,16 @@ For `invoke`, the same rule holds inside the returned `INVOKE_SUMMARY`:
 - then its own optional `USER_ESCALATION_REQUEST`
 - both still sit inside the overall caller-facing wrapper output
 
+## Typical caller round-trip
+
+When a managed channel needs user input:
+
+1. run the wrapper command normally
+2. inspect optional `GOVERNOR_REVIEW`
+3. if a `USER_ESCALATION_REQUEST` is present after that review, surface the question to the user
+4. take the user's answer and send it back through the next wrapper command as `fresh_user_message`
+5. let the wrapper resume the managed session; do not replace the session unless the user explicitly authorizes `dangerous-new-session`
+
 ## Commands
 
 | Situation | Guide |
