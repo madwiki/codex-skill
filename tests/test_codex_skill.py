@@ -623,6 +623,14 @@ class MadAgentMeshIntegrationTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertNotIn("<<<USER_ESCALATION_REQUEST.BEGIN>>>", proc.stdout)
         self.assertIn("<<<GOVERNOR_REVIEW.BEGIN>>>", proc.stdout)
+        self.assertLess(
+            proc.stdout.index("<<<INVOKER_SKILL_USAGE_"),
+            proc.stdout.index("<<<GOVERNOR_REVIEW.BEGIN>>>"),
+        )
+        self.assertLess(
+            proc.stdout.index("<<<GOVERNOR_REVIEW.BEGIN>>>"),
+            proc.stdout.index("<<<CHANNEL_REPLY.BEGIN>>>"),
+        )
 
     def test_governor_can_approve_user_escalation(self) -> None:
         tempdir, workspace = self.create_workspace(
@@ -652,6 +660,70 @@ class MadAgentMeshIntegrationTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("<<<USER_ESCALATION_REQUEST.BEGIN>>>", proc.stdout)
         self.assertIn("question: Ask the user?", proc.stdout)
+        self.assertLess(
+            proc.stdout.index("<<<INVOKER_SKILL_USAGE_"),
+            proc.stdout.index("<<<GOVERNOR_REVIEW.BEGIN>>>"),
+        )
+        self.assertLess(
+            proc.stdout.index("<<<GOVERNOR_REVIEW.BEGIN>>>"),
+            proc.stdout.index("<<<USER_ESCALATION_REQUEST.BEGIN>>>"),
+        )
+        self.assertLess(
+            proc.stdout.index("<<<USER_ESCALATION_REQUEST.BEGIN>>>"),
+            proc.stdout.index("<<<CHANNEL_REPLY.BEGIN>>>"),
+        )
+
+    def test_invoke_result_preserves_governor_then_user_escalation_order(self) -> None:
+        tempdir, workspace = self.create_workspace(
+            initial_config=self.build_config(
+                [
+                    self.build_channel("default", session_id="executor-session"),
+                    self.build_channel("governor", session_id="governor-session"),
+                ]
+            )
+        )
+        self.addCleanup(tempdir.cleanup)
+
+        proc, _captures, _state = self.run_in_workspace(
+            workspace,
+            "invoke",
+            json.dumps(
+                {
+                    "requests": [
+                        {
+                            "command": "execute-this-plan",
+                            "mams_channel": "default",
+                            "input": {"approved_plan": "Execute the plan."},
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            ),
+            "## Work Report\n\nDid the work.\n\n## User Escalation Request\n\nblocking: false\nquestion: Ask the user?\nreason: Unsure.\n",
+            env_extra={
+                "FAKE_CHANNEL_REPLY_MAP": json.dumps(
+                    {
+                        "Originating managed channel:": "escalate_to_user: true\n\n## Governor Review Reply\n\nSurface it.",
+                    },
+                    ensure_ascii=False,
+                )
+            },
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("<<<INVOKE_SUMMARY.BEGIN>>>", proc.stdout)
+        self.assertIn("<<<INVOKE_RESULT.BEGIN>>>", proc.stdout)
+        self.assertLess(
+            proc.stdout.index("<<<CHANNEL_REPLY.BEGIN>>>"),
+            proc.stdout.index("<<<INVOKE_SUMMARY.BEGIN>>>"),
+        )
+        self.assertLess(
+            proc.stdout.index("<<<INVOKE_RESULT.BEGIN>>>"),
+            proc.stdout.index("<<<GOVERNOR_REVIEW.BEGIN>>>"),
+        )
+        self.assertLess(
+            proc.stdout.index("<<<GOVERNOR_REVIEW.BEGIN>>>"),
+            proc.stdout.index("<<<USER_ESCALATION_REQUEST.BEGIN>>>"),
+        )
 
     def test_invoke_uses_concurrent_mode_for_read_only_requests(self) -> None:
         tempdir, workspace = self.create_workspace(

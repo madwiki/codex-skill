@@ -70,6 +70,27 @@ The wrapper also injects an Invoker-facing usage reminder into successful wrappe
 - the brief reminder says the full reminder still applies
 - the reminder also tells the caller to re-read `SKILL.md` after compaction or when the operating pattern is unclear
 
+## Wrapper output contract
+
+Invoker should read successful wrapper replies in this order:
+
+1. `INVOKER_SKILL_USAGE_*`
+2. optional `GOVERNOR_REVIEW`
+3. optional `USER_ESCALATION_REQUEST`
+4. `CHANNEL_REPLY`
+
+Meaning:
+
+- `GOVERNOR_REVIEW` is governance guidance for Invoker, not a direct user message
+- `USER_ESCALATION_REQUEST` is the user-facing question only after governor review allows it
+- `CHANNEL_REPLY` is still the managed channel's actual reply body
+
+For `invoke`, the same rule holds inside the returned `INVOKE_SUMMARY`:
+
+- each `INVOKE_RESULT` may contain its own optional `GOVERNOR_REVIEW`
+- then its own optional `USER_ESCALATION_REQUEST`
+- both still sit inside the overall caller-facing wrapper output
+
 ## Commands
 
 | Situation | Guide |

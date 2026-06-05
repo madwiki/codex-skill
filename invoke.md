@@ -16,6 +16,10 @@ Use `invoke` when you want one blocking wrapper call that drives one or more man
 - if any request mutates, `invoke` runs all requests sequentially
 - do not target the same channel twice in one `invoke` call
 - the wrapper reply may prepend an Invoker-facing skill-usage reminder block; treat it as caller guidance, not as managed channel output
+- inside the wrapper output, read blocks in order:
+  - `INVOKER_SKILL_USAGE_*`
+  - `CHANNEL_REPLY`
+  - then inside `INVOKE_SUMMARY`, each `INVOKE_RESULT` may contain optional `GOVERNOR_REVIEW` and optional `USER_ESCALATION_REQUEST`
 
 ## Input
 
