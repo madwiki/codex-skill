@@ -269,6 +269,11 @@ class MadAgentMeshIntegrationTests(unittest.TestCase):
         self.assertIn("modifying code directly", contents)
         self.assertIn("allow_implicit_invocation: true", contents)
 
+    def test_skill_frontmatter_uses_dollar_invocation_not_slash(self) -> None:
+        skill_md = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("Use $mad-agent-mesh", skill_md)
+        self.assertNotIn("Use /mad-agent-mesh", skill_md)
+
     def test_governor_escalation_prompt_asset_exists(self) -> None:
         prompt_path = ROOT / "prompts" / "governor-user-escalation.md"
         self.assertTrue(prompt_path.is_file(), prompt_path)

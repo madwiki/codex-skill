@@ -2,6 +2,8 @@
 
 `mad-agent-mesh` is a wrapper around managed runner-backed channels.
 
+Explicit skill invocation is `$mad-agent-mesh`, not a slash command.
+
 From the caller's point of view, this repository is a skill:
 
 - the caller is only the workflow messenger and user-facing entrypoint
