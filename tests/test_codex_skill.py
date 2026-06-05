@@ -433,6 +433,65 @@ class MadAgentMeshIntegrationTests(unittest.TestCase):
         self.assertNotIn("<<<MAMS_REMINDER_FULL.BEGIN>>>", prompt)
         self.assertNotIn("<<<USER_REMINDER.BEGIN>>>", prompt)
 
+    def test_sync_injects_fresh_user_message_verbatim(self) -> None:
+        tempdir, workspace = self.create_workspace(
+            initial_config=self.build_config(
+                [self.build_channel("default", session_id="existing", baseline="Keep scope tight.")]
+            )
+        )
+        self.addCleanup(tempdir.cleanup)
+
+        user_message = "用户原话：先不要扩 scope，只回答为什么 review 没过。"
+        proc, captures, _state = self.run_in_workspace(
+            workspace,
+            "sync",
+            json.dumps(
+                {
+                    "sync_message": "Discuss the blocker.",
+                    "fresh_user_message": user_message,
+                    "stage_context": "plan",
+                },
+                ensure_ascii=False,
+            ),
+            "## Discussion Reply\n\nStay within the current plan.",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        prompt = captures[-1]["stdin"]
+        self.assertIn("<<<USER_MESSAGE_VERBATIM.BEGIN>>>", prompt)
+        self.assertIn(user_message, prompt)
+
+    def test_invoke_passes_fresh_user_message_through_to_managed_prompt(self) -> None:
+        tempdir, workspace = self.create_workspace(
+            initial_config=self.build_config([self.build_channel("default", session_id="existing")])
+        )
+        self.addCleanup(tempdir.cleanup)
+
+        user_message = "用户原话：这次只审 plan，不要给实现建议。"
+        proc, captures, _state = self.run_in_workspace(
+            workspace,
+            "invoke",
+            json.dumps(
+                {
+                    "requests": [
+                        {
+                            "command": "review-this-plan",
+                            "mams_channel": "default",
+                            "input": {
+                                "plan_for_review": "Plan v1",
+                                "fresh_user_message": user_message,
+                            },
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            ),
+            "approved_to_mutate: true\n\n## Plan Review Reply\n\nLooks coherent.",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        prompt = captures[-1]["stdin"]
+        self.assertIn("<<<USER_MESSAGE_VERBATIM.BEGIN>>>", prompt)
+        self.assertIn(user_message, prompt)
+
     def test_invoker_skill_usage_reminder_uses_full_then_brief_cadence(self) -> None:
         tempdir, workspace = self.create_workspace(
             initial_config=self.build_config([self.build_channel("default", session_id="existing")])

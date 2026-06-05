@@ -61,6 +61,8 @@ The wrapper injects configured channel guidance with a stage cadence:
 - switching stages resets the cadence for the new stage
 - replacing the session resets the stage cadence
 
+When a wrapper command accepts `fresh_user_message`, that message is injected into the managed channel prompt verbatim as `USER_MESSAGE_VERBATIM`. The wrapper caller may lightly normalize transcription noise before sending it, but the managed channel receives the caller's provided wording, not a wrapper-generated paraphrase.
+
 The wrapper also injects an Invoker-facing usage reminder into successful wrapper replies:
 
 - first reply: full
