@@ -27,8 +27,6 @@ SKILL_ROOT = SCRIPT_DIR.parent
 PROMPTS_DIR = SKILL_ROOT / "prompts"
 
 USER_MESSAGE_VERBATIM_TAG = "USER_MESSAGE_VERBATIM"
-INIT_TASK_FIELD = "task_background"
-INIT_RECOVERY_FIELD = "recovery_background"
 REVIEW_PLAN_FIELD = "plan_for_review"
 REVIEW_PLAN_NEW_INFO_FIELD = "new_information"
 REVIEW_PLAN_FRESH_USER_FIELD = "fresh_user_message"
@@ -39,6 +37,7 @@ REVIEW_WORK_FRESH_USER_FIELD = "fresh_user_message"
 REVIEW_WORK_APPROVED_FIELD = "approved_work"
 SYNC_MESSAGE_FIELD = "sync_message"
 SYNC_FRESH_USER_FIELD = "fresh_user_message"
+SYNC_STAGE_CONTEXT_FIELD = "stage_context"
 EXECUTE_PLAN_FIELD = "approved_plan"
 EXECUTE_PLAN_PART_FIELD = "approved_plan_part"
 EXECUTE_FRESH_USER_FIELD = "fresh_user_message"
@@ -50,50 +49,34 @@ DANGEROUS_NEW_SESSION_TARGET_FIELD = "target_session_id"
 DANGEROUS_NEW_SESSION_MAMS_CHANNEL_DESCRIPTION_FIELD = "mams_channel_description"
 DANGEROUS_NEW_SESSION_MODEL_FIELD = "model"
 DANGEROUS_NEW_SESSION_REASONING_EFFORT_FIELD = "reasoning_effort"
-CONFIGURE_MAMS_INVOKER_FIELD = "mams_invoker"
-CONFIGURE_SHARED_STAGES_FIELD = "shared_stages"
 CONFIGURE_MAMS_CHANNELS_FIELD = "mams_channels"
-INIT_TASK_REPLY_TITLE = "Task Understanding Reply"
-INIT_RECOVERY_REPLY_TITLE = "Context Recovery Reply"
 REVIEW_PLAN_REPLY_TITLE = "Plan Review Reply"
 REVIEW_WORK_REPLY_TITLE = "Work Review Reply"
 SYNC_REPLY_TITLE = "Discussion Reply"
 SYNC_PLAN_TITLE = "Plan"
+EXECUTE_WORK_REPORT_TITLE = "Work Report"
+USER_ESCALATION_REQUEST_TITLE = "User Escalation Request"
+GOVERNOR_ESCALATION_REVIEW_TOOL = "governor-user-escalation"
+GOVERNOR_CHANNEL_NAME = "governor"
+GOVERNOR_ESCALATE_FIELD = "escalate_to_user"
+GOVERNOR_REVIEW_REPLY_TITLE = "Governor Review Reply"
 SANDBOX_READ_ONLY = "read-only"
 SANDBOX_WORKSPACE_WRITE = "workspace-write"
 SANDBOX_DANGER_FULL_ACCESS = "danger-full-access"
 PROCESS_POLL_INTERVAL_S = 20
 PROCESS_IDLE_TIMEOUT_S = 600
 MAMS_CHANNELS_FILENAME = "mams_channels.json"
-LEGACY_SESSION_FILENAME = "codex_session.json"
-LEGACY_HISTORY_FILENAME = "codex_session_history.json"
 MANAGED_DIRNAME = ".mad-agent-mesh"
-LEGACY_MANAGED_DIRNAME = ".claude"
+DIAGNOSTICS_DIRNAME = "diagnostics"
 DEFAULT_MAMS_CHANNEL_NAME = "default"
 DEFAULT_MAMS_CHANNEL_DESCRIPTION = "Primary managed MAMS channel."
-MIGRATED_MAMS_CHANNEL_DESCRIPTION = "Migrated primary managed MAMS channel."
 CONFIG_VERSION = 5
 REF_DIRECTORY = f"{MANAGED_DIRNAME}/refs"
 RUNNER_CODEX = "codex"
 RUNNER_CLAUDE_CODE = "claude-code"
 SUPPORTED_RUNNERS = {RUNNER_CODEX, RUNNER_CLAUDE_CODE}
 REF_PATTERN = re.compile(r"\[\[REF:(?P<path>[^:\]]+?)(?:::(?P<locator>[^\]]+))?\]\]")
-LEGACY_STAGE_KEY_MAP = {
-    "chat": "sync",
-    "work-sync": "sync",
-    "review-my-plan": "review-this-plan",
-    "review-my-work": "review-this-work",
-    "request-mutation": "execute-this-plan",
-}
-
-LEGACY_STRUCTURED_FILENAMES = (
-    "codex_agents.json",
-    "codex_channels.json",
-    "mams_channels.json",
-)
-
 TOOL_HELP = {
-    "init": "Bootstrap managed-channel collaboration for a new task or recovery sync (reads JSON from stdin).",
     "invoke": "Invoke one or more mams_channel commands through one blocking wrapper call (reads JSON from stdin).",
     "sync": "Discussion / coordination / disagreement-resolution turn (reads JSON from stdin).",
     "review-this-plan": "Review the submitted plan on the targeted managed channel without mutating state (reads JSON from stdin).",
@@ -101,8 +84,7 @@ TOOL_HELP = {
     "execute-this-plan": "Execute one approved plan on a mutate-capable managed channel (reads JSON from stdin).",
     "execute-this-plan-part": "Execute one approved plan part on a mutate-capable managed channel (reads JSON from stdin).",
     "dangerous-new-session": "Explicitly authorize discarding continuity and starting or switching a managed MAMS mams_channel session (reads JSON from stdin).",
-    "configure": "Patch mams_invoker guidance, shared guidance, or mams_channel metadata (reads JSON from stdin).",
-    "update-config": "Normalize discoverable managed state and rewrite the canonical config (does not read JSON from stdin).",
+    "configure": "Patch managed mams_channel metadata and prompt profiles (reads JSON from stdin).",
 }
 
 INVOKE_REQUESTS_FIELD = "requests"
@@ -110,7 +92,6 @@ INVOKE_COMMAND_FIELD = "command"
 INVOKE_INPUT_FIELD = "input"
 INVOKE_MAMS_CHANNEL_FIELD = "mams_channel"
 INVOKE_ALLOWED_COMMANDS = {
-    "init",
     "sync",
     "review-this-plan",
     "review-this-work",
@@ -124,16 +105,15 @@ def eprint(*args: object) -> None:
     print(*args, file=sys.stderr)
 
 
-CLAUDE_GLOBAL_DIR = (Path.home() / LEGACY_MANAGED_DIRNAME).resolve()
 MANAGED_GLOBAL_DIR = (Path.home() / MANAGED_DIRNAME).resolve()
 
 
 def is_global_managed_dir(directory: Path) -> bool:
     try:
         resolved = directory.resolve()
-        return resolved in {CLAUDE_GLOBAL_DIR, MANAGED_GLOBAL_DIR}
+        return resolved == MANAGED_GLOBAL_DIR
     except Exception:
-        return str(directory) in {str(CLAUDE_GLOBAL_DIR), str(MANAGED_GLOBAL_DIR)}
+        return str(directory) == str(MANAGED_GLOBAL_DIR)
 
 
 def iter_ancestors(start: Path) -> Iterator[Path]:
@@ -151,23 +131,16 @@ def find_session_root(start: Path) -> Optional[Path]:
     file.
 
     IMPORTANT:
-    - Never treat the global ~/.claude or ~/.mad-agent-mesh directory as a project root.
-    - `.mad-agent-mesh/mams_channels.json` is the stable anchor.
-    - Legacy structured config filenames and `.claude/codex_session.json` are accepted only as migration anchors so the wrapper can
-      migrate them into the new structured config location.
-    - `.mad-agent-mesh/` or `.claude/` alone can exist at many levels for other purposes, so we do
+    - Never treat the global ~/.mad-agent-mesh directory as a project root.
+    - `.mad-agent-mesh/mams_channels.json` is the only project session anchor.
+    - `.mad-agent-mesh/` alone can exist at many levels for other purposes, so we do
       not auto-pick based on the directory alone.
     """
     for p in iter_ancestors(start):
         managed_dir = p / MANAGED_DIRNAME
-        legacy_dir = p / LEGACY_MANAGED_DIRNAME
-        if is_global_managed_dir(managed_dir) or is_global_managed_dir(legacy_dir):
+        if is_global_managed_dir(managed_dir):
             continue
-        if any((managed_dir / filename).is_file() for filename in LEGACY_STRUCTURED_FILENAMES):
-            return p
-        if any((legacy_dir / filename).is_file() for filename in LEGACY_STRUCTURED_FILENAMES):
-            return p
-        if (legacy_dir / LEGACY_SESSION_FILENAME).is_file():
+        if (managed_dir / MAMS_CHANNELS_FILENAME).is_file():
             return p
     return None
 
@@ -176,10 +149,9 @@ def candidate_roots_with_managed_dir(start: Path, limit: int = 5) -> list[Path]:
     candidates: list[Path] = []
     for p in iter_ancestors(start):
         managed_dir = p / MANAGED_DIRNAME
-        legacy_dir = p / LEGACY_MANAGED_DIRNAME
-        if is_global_managed_dir(managed_dir) or is_global_managed_dir(legacy_dir):
+        if is_global_managed_dir(managed_dir):
             continue
-        if managed_dir.is_dir() or legacy_dir.is_dir():
+        if managed_dir.is_dir():
             candidates.append(p)
             if len(candidates) >= limit:
                 break
@@ -190,20 +162,8 @@ def mams_channels_file_path(repo_root: Path) -> Path:
     return repo_root / MANAGED_DIRNAME / MAMS_CHANNELS_FILENAME
 
 
-def iter_legacy_structured_config_paths(repo_root: Path) -> Iterator[Path]:
-    for filename in LEGACY_STRUCTURED_FILENAMES:
-        managed_path = repo_root / MANAGED_DIRNAME / filename
-        if managed_path.name != MAMS_CHANNELS_FILENAME:
-            yield managed_path
-        yield repo_root / LEGACY_MANAGED_DIRNAME / filename
-
-
-def legacy_session_file_path(repo_root: Path) -> Path:
-    return repo_root / LEGACY_MANAGED_DIRNAME / LEGACY_SESSION_FILENAME
-
-
-def legacy_session_history_file_path(repo_root: Path) -> Path:
-    return repo_root / LEGACY_MANAGED_DIRNAME / LEGACY_HISTORY_FILENAME
+def diagnostics_dir_path(repo_root: Path) -> Path:
+    return repo_root / MANAGED_DIRNAME / DIAGNOSTICS_DIRNAME
 
 
 def iso_now() -> str:
@@ -215,14 +175,42 @@ def iso_now() -> str:
     )
 
 
+def diagnostic_timestamp_slug() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def diagnostic_preview(text: str, *, max_lines: int = 8, max_chars: int = 600) -> str:
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not normalized:
+        return "(empty)"
+    lines = normalized.splitlines()
+    preview = "\n".join(lines[:max_lines]).strip()
+    if len(preview) > max_chars:
+        preview = preview[: max_chars - 3].rstrip() + "..."
+    if len(lines) > max_lines and len(preview) < max_chars:
+        preview = preview.rstrip() + "\n..."
+    return preview
+
+
 @dataclass(frozen=True)
-class MamsChannelConfig:
-    name: str
-    description: str
+class MamsPromptProfileBlock:
+    description: Optional[str]
     focus: Optional[str]
     baseline: Optional[str]
     extra_context: Optional[str]
-    stage_guidance: dict[str, str]
+
+
+@dataclass(frozen=True)
+class MamsChannelPromptProfile:
+    public: MamsPromptProfileBlock
+    plan_stage: MamsPromptProfileBlock
+    execution_stage: MamsPromptProfileBlock
+
+
+@dataclass(frozen=True)
+class MamsChannelConfig:
+    name: str
+    prompt_profile: MamsChannelPromptProfile
     can_mutate: bool
     runner: str
     runner_config: dict[str, object]
@@ -230,25 +218,16 @@ class MamsChannelConfig:
     model: Optional[str]
     reasoning_effort: Optional[str]
     previous_session_ids: tuple[str, ...]
-    reminder_turn_count: int
+    last_stage_context: Optional[str]
+    stage_reminder_turn_count: int
     updated_at: str
-
-
-@dataclass(frozen=True)
-class MamsInvokerConfig:
-    baseline: Optional[str]
-    working_style: Optional[str]
-    extra_context: Optional[str]
-    stage_guidance: dict[str, str]
-    can_mutate: bool
 
 
 @dataclass(frozen=True)
 class MamsSkillConfig:
     version: int
-    mams_invoker: MamsInvokerConfig
-    shared_stages: dict[str, str]
     mams_channels: list[MamsChannelConfig]
+    invoker_reminder_turn_count: int
     updated_at: str
 
 
@@ -259,6 +238,13 @@ def normalize_optional_string(value: object) -> Optional[str]:
         return None
     normalized = value.strip()
     return normalized or None
+
+
+def merge_optional_texts(*values: Optional[str]) -> Optional[str]:
+    parts = [value.strip() for value in values if isinstance(value, str) and value.strip()]
+    if not parts:
+        return None
+    return "\n\n".join(parts)
 
 
 def normalize_previous_session_ids(items: object) -> tuple[str, ...]:
@@ -290,16 +276,108 @@ def normalize_string_map(value: object, *, field_name: str) -> dict[str, str]:
     return result
 
 
-def normalize_stage_key(key: str) -> str:
-    return LEGACY_STAGE_KEY_MAP.get(key, key)
+def default_prompt_profile_block() -> MamsPromptProfileBlock:
+    return MamsPromptProfileBlock(
+        description=None,
+        focus=None,
+        baseline=None,
+        extra_context=None,
+    )
 
 
-def normalize_stage_guidance_map(value: object, *, field_name: str) -> dict[str, str]:
-    result = normalize_string_map(value, field_name=field_name)
-    normalized: dict[str, str] = {}
-    for key, stage_text in result.items():
-        normalized[normalize_stage_key(key)] = stage_text
-    return normalized
+def normalize_prompt_profile_block(
+    value: object,
+    *,
+    field_name: str,
+) -> MamsPromptProfileBlock:
+    if value is None:
+        return default_prompt_profile_block()
+    if not isinstance(value, dict):
+        raise ValueError(f"{field_name} must be a JSON object when provided.")
+
+    allowed_keys = {"description", "focus", "baseline", "extra_context"}
+    unknown_keys = set(value.keys()) - allowed_keys
+    if unknown_keys:
+        raise ValueError(
+            f"{field_name} has unsupported fields: {', '.join(sorted(unknown_keys))}."
+        )
+
+    return MamsPromptProfileBlock(
+        description=normalize_optional_string(value.get("description")),
+        focus=normalize_optional_string(value.get("focus")),
+        baseline=normalize_optional_string(value.get("baseline")),
+        extra_context=normalize_optional_string(value.get("extra_context")),
+    )
+
+
+def prompt_profile_block_to_json(block: MamsPromptProfileBlock) -> dict[str, object]:
+    return {
+        "description": block.description,
+        "focus": block.focus,
+        "baseline": block.baseline,
+        "extra_context": block.extra_context,
+    }
+
+
+def default_channel_prompt_profile() -> MamsChannelPromptProfile:
+    empty = default_prompt_profile_block()
+    return MamsChannelPromptProfile(
+        public=empty,
+        plan_stage=empty,
+        execution_stage=empty,
+    )
+
+
+def normalize_channel_prompt_profile(
+    value: object,
+    *,
+    field_name: str,
+) -> MamsChannelPromptProfile:
+    if value is None:
+        return default_channel_prompt_profile()
+    if not isinstance(value, dict):
+        raise ValueError(f"{field_name} must be a JSON object when provided.")
+
+    allowed_keys = {"public", "plan_stage", "execution_stage"}
+    unknown_keys = set(value.keys()) - allowed_keys
+    if unknown_keys:
+        raise ValueError(
+            f"{field_name} has unsupported fields: {', '.join(sorted(unknown_keys))}."
+        )
+
+    return MamsChannelPromptProfile(
+        public=normalize_prompt_profile_block(
+            value.get("public"),
+            field_name=f"{field_name}.public",
+        ),
+        plan_stage=normalize_prompt_profile_block(
+            value.get("plan_stage"),
+            field_name=f"{field_name}.plan_stage",
+        ),
+        execution_stage=normalize_prompt_profile_block(
+            value.get("execution_stage"),
+            field_name=f"{field_name}.execution_stage",
+        ),
+    )
+
+
+def channel_prompt_profile_to_json(profile: MamsChannelPromptProfile) -> dict[str, object]:
+    return {
+        "public": prompt_profile_block_to_json(profile.public),
+        "plan_stage": prompt_profile_block_to_json(profile.plan_stage),
+        "execution_stage": prompt_profile_block_to_json(profile.execution_stage),
+    }
+
+
+def merge_prompt_profile_blocks(
+    *blocks: MamsPromptProfileBlock,
+) -> MamsPromptProfileBlock:
+    return MamsPromptProfileBlock(
+        description=merge_optional_texts(*(block.description for block in blocks)),
+        focus=merge_optional_texts(*(block.focus for block in blocks)),
+        baseline=merge_optional_texts(*(block.baseline for block in blocks)),
+        extra_context=merge_optional_texts(*(block.extra_context for block in blocks)),
+    )
 
 
 def normalize_runner(value: object, *, field_name: str) -> str:
@@ -328,11 +406,7 @@ def default_mams_channel_description(name: str) -> str:
 def build_mams_channel_config(
     name: str,
     *,
-    description: Optional[str] = None,
-    focus: Optional[str] = None,
-    baseline: Optional[str] = None,
-    extra_context: Optional[str] = None,
-    stage_guidance: Optional[dict[str, str]] = None,
+    prompt_profile: Optional[MamsChannelPromptProfile] = None,
     can_mutate: bool = True,
     runner: str = RUNNER_CODEX,
     runner_config: Optional[dict[str, object]] = None,
@@ -340,21 +414,15 @@ def build_mams_channel_config(
     model: Optional[str] = None,
     reasoning_effort: Optional[str] = None,
     previous_session_ids: tuple[str, ...] = (),
-    reminder_turn_count: int = 0,
+    last_stage_context: Optional[str] = None,
+    stage_reminder_turn_count: int = 0,
 ) -> MamsChannelConfig:
     normalized_name = normalize_optional_string(name)
     if not normalized_name:
         raise ValueError("MAMS channel name must be a non-empty string.")
-    normalized_description = normalize_optional_string(description) or default_mams_channel_description(
-        normalized_name
-    )
     return MamsChannelConfig(
         name=normalized_name,
-        description=normalized_description,
-        focus=normalize_optional_string(focus),
-        baseline=normalize_optional_string(baseline),
-        extra_context=normalize_optional_string(extra_context),
-        stage_guidance=dict(stage_guidance or {}),
+        prompt_profile=prompt_profile or default_channel_prompt_profile(),
         can_mutate=bool(can_mutate),
         runner=normalize_runner(runner, field_name=f"mams_channels[{normalized_name}].runner"),
         runner_config=normalize_runner_config(runner_config, field_name=f"mams_channels[{normalized_name}].runner_config"),
@@ -362,7 +430,8 @@ def build_mams_channel_config(
         model=normalize_optional_string(model),
         reasoning_effort=normalize_optional_string(reasoning_effort),
         previous_session_ids=normalize_previous_session_ids(list(previous_session_ids)),
-        reminder_turn_count=max(0, int(reminder_turn_count)),
+        last_stage_context=normalize_optional_string(last_stage_context),
+        stage_reminder_turn_count=max(0, int(stage_reminder_turn_count)),
         updated_at=iso_now(),
     )
 
@@ -373,18 +442,16 @@ def parse_mams_channel_config(obj: object) -> MamsChannelConfig:
     name = normalize_optional_string(obj.get("name"))
     if not name:
         raise ValueError("Each mams_channel entry requires a non-empty string field: name.")
-    description = normalize_optional_string(obj.get("description")) or default_mams_channel_description(name)
     updated_at = normalize_optional_string(obj.get("updated_at")) or iso_now()
     raw_can_mutate = obj.get("can_mutate", True)
     if not isinstance(raw_can_mutate, bool):
         raise ValueError(f"mams_channels[{name}].can_mutate must be a boolean when provided.")
     return MamsChannelConfig(
         name=name,
-        description=description,
-        focus=normalize_optional_string(obj.get("focus")),
-        baseline=normalize_optional_string(obj.get("baseline")),
-        extra_context=normalize_optional_string(obj.get("extra_context")),
-        stage_guidance=normalize_stage_guidance_map(obj.get("stage_guidance"), field_name=f"mams_channels[{name}].stage_guidance"),
+        prompt_profile=normalize_channel_prompt_profile(
+            obj.get("prompt_profile"),
+            field_name=f"mams_channels[{name}].prompt_profile",
+        ),
         can_mutate=raw_can_mutate,
         runner=normalize_runner(obj.get("runner"), field_name=f"mams_channels[{name}].runner"),
         runner_config=normalize_runner_config(obj.get("runner_config"), field_name=f"mams_channels[{name}].runner_config"),
@@ -392,7 +459,8 @@ def parse_mams_channel_config(obj: object) -> MamsChannelConfig:
         model=normalize_optional_string(obj.get("model")),
         reasoning_effort=normalize_optional_string(obj.get("reasoning_effort")),
         previous_session_ids=normalize_previous_session_ids(obj.get("previous_session_ids")),
-        reminder_turn_count=max(0, int(obj.get("reminder_turn_count", 0) or 0)),
+        last_stage_context=normalize_optional_string(obj.get("last_stage_context")),
+        stage_reminder_turn_count=max(0, int(obj.get("stage_reminder_turn_count", 0) or 0)),
         updated_at=updated_at,
     )
 
@@ -400,11 +468,7 @@ def parse_mams_channel_config(obj: object) -> MamsChannelConfig:
 def mams_channel_config_to_json(mams_channel: MamsChannelConfig) -> dict[str, object]:
     return {
         "name": mams_channel.name,
-        "description": mams_channel.description,
-        "focus": mams_channel.focus,
-        "baseline": mams_channel.baseline,
-        "extra_context": mams_channel.extra_context,
-        "stage_guidance": mams_channel.stage_guidance,
+        "prompt_profile": channel_prompt_profile_to_json(mams_channel.prompt_profile),
         "can_mutate": mams_channel.can_mutate,
         "runner": mams_channel.runner,
         "runner_config": mams_channel.runner_config,
@@ -412,62 +476,25 @@ def mams_channel_config_to_json(mams_channel: MamsChannelConfig) -> dict[str, ob
         "model": mams_channel.model,
         "reasoning_effort": mams_channel.reasoning_effort,
         "previous_session_ids": list(mams_channel.previous_session_ids),
-        "reminder_turn_count": mams_channel.reminder_turn_count,
+        "last_stage_context": mams_channel.last_stage_context,
+        "stage_reminder_turn_count": mams_channel.stage_reminder_turn_count,
         "updated_at": mams_channel.updated_at,
     }
-
-
-def default_mams_invoker_config() -> MamsInvokerConfig:
-    return MamsInvokerConfig(
-        baseline=None,
-        working_style=None,
-        extra_context=None,
-        stage_guidance={},
-        can_mutate=True,
-    )
 
 
 def default_mams_skill_config(mams_channels: Optional[list[MamsChannelConfig]] = None) -> MamsSkillConfig:
     return MamsSkillConfig(
         version=CONFIG_VERSION,
-        mams_invoker=default_mams_invoker_config(),
-        shared_stages={},
         mams_channels=list(mams_channels or []),
+        invoker_reminder_turn_count=0,
         updated_at=iso_now(),
     )
 
 
-def parse_mams_invoker_config(obj: object) -> MamsInvokerConfig:
-    if obj is None:
-        return default_mams_invoker_config()
-    if not isinstance(obj, dict):
-        raise ValueError("mams_invoker must be a JSON object when provided.")
-    raw_can_mutate = obj.get("can_mutate", True)
-    if not isinstance(raw_can_mutate, bool):
-        raise ValueError("mams_invoker.can_mutate must be a boolean when provided.")
-    return MamsInvokerConfig(
-        baseline=normalize_optional_string(obj.get("baseline")),
-        working_style=normalize_optional_string(obj.get("working_style")),
-        extra_context=normalize_optional_string(obj.get("extra_context")),
-        stage_guidance=normalize_stage_guidance_map(obj.get("stage_guidance"), field_name="mams_invoker.stage_guidance"),
-        can_mutate=raw_can_mutate,
-    )
-
-
-def mams_invoker_config_to_json(config: MamsInvokerConfig) -> dict[str, object]:
-    return {
-        "baseline": config.baseline,
-        "working_style": config.working_style,
-        "extra_context": config.extra_context,
-        "stage_guidance": config.stage_guidance,
-        "can_mutate": config.can_mutate,
-    }
-
-
 def parse_skill_config_object(obj: object, *, path: Path) -> MamsSkillConfig:
     if not isinstance(obj, dict):
-        raise RuntimeError(f"MAMS channel config file must contain a JSON object or legacy JSON array: {path}")
-    mams_channels_value = obj.get("mams_channels", obj.get("channels", obj.get("agents")))
+        raise RuntimeError(f"MAMS channel config file must contain a JSON object: {path}")
+    mams_channels_value = obj.get("mams_channels")
     if mams_channels_value is None:
         raise RuntimeError(f"Config object must contain a 'mams_channels' array: {path}")
     if not isinstance(mams_channels_value, list):
@@ -480,12 +507,6 @@ def parse_skill_config_object(obj: object, *, path: Path) -> MamsSkillConfig:
             raise RuntimeError(f"Duplicate mams_channel name in {path}: {mams_channel.name}")
         seen.add(mams_channel.name)
         mams_channels.append(mams_channel)
-    try:
-        shared_stages = normalize_stage_guidance_map(obj.get("shared_stages"), field_name="shared_stages")
-        mams_invoker_source = obj.get("mams_invoker", obj.get("invoker", obj.get("caller", obj.get("claude"))))
-        mams_invoker = parse_mams_invoker_config(mams_invoker_source)
-    except ValueError as exc:
-        raise RuntimeError(str(exc)) from exc
     version = obj.get("version")
     if isinstance(version, int):
         normalized_version = version
@@ -494,9 +515,8 @@ def parse_skill_config_object(obj: object, *, path: Path) -> MamsSkillConfig:
     updated_at = normalize_optional_string(obj.get("updated_at")) or iso_now()
     return MamsSkillConfig(
         version=normalized_version,
-        mams_invoker=mams_invoker,
-        shared_stages=shared_stages,
         mams_channels=mams_channels,
+        invoker_reminder_turn_count=max(0, int(obj.get("invoker_reminder_turn_count", 0) or 0)),
         updated_at=updated_at,
     )
 
@@ -504,9 +524,8 @@ def parse_skill_config_object(obj: object, *, path: Path) -> MamsSkillConfig:
 def skill_config_to_json(config: MamsSkillConfig) -> dict[str, object]:
     return {
         "version": config.version,
-        "mams_invoker": mams_invoker_config_to_json(config.mams_invoker),
-        "shared_stages": config.shared_stages,
         "mams_channels": [mams_channel_config_to_json(mams_channel) for mams_channel in config.mams_channels],
+        "invoker_reminder_turn_count": config.invoker_reminder_turn_count,
         "updated_at": config.updated_at,
     }
 
@@ -519,16 +538,6 @@ def read_skill_config(repo_root: Path) -> MamsSkillConfig:
         data = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"Invalid mams_channel config JSON in {path}: {exc.msg}") from exc
-    if isinstance(data, list):
-        mams_channels = []
-        seen: set[str] = set()
-        for raw in data:
-            mams_channel = parse_mams_channel_config(raw)
-            if mams_channel.name in seen:
-                raise RuntimeError(f"Duplicate mams_channel name in {path}: {mams_channel.name}")
-            seen.add(mams_channel.name)
-            mams_channels.append(mams_channel)
-        return default_mams_skill_config(mams_channels)
     return parse_skill_config_object(data, path=path)
 
 
@@ -539,164 +548,6 @@ def write_skill_config(repo_root: Path, config: MamsSkillConfig) -> None:
     tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     tmp.replace(path)
-
-
-def read_legacy_session_id(repo_root: Path) -> Optional[str]:
-    path = legacy_session_file_path(repo_root)
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(data, dict):
-            sid = data.get("session_id")
-            if isinstance(sid, str) and sid.strip():
-                return sid.strip()
-    except Exception:
-        return None
-    return None
-
-
-def read_legacy_session_history(repo_root: Path) -> tuple[str, ...]:
-    path = legacy_session_history_file_path(repo_root)
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return ()
-    if not isinstance(data, dict):
-        return ()
-    return normalize_previous_session_ids(data.get("previous_session_ids"))
-
-
-@dataclass(frozen=True)
-class MigrationSource:
-    kind: str
-    path: Optional[Path]
-    config: MamsSkillConfig
-    detail: str
-
-
-def structured_config_needs_migration(raw_obj: dict[str, object]) -> bool:
-    if any(legacy_key in raw_obj for legacy_key in ("claude", "caller", "invoker", "channels", "agents")):
-        return True
-    version = raw_obj.get("version")
-    if not isinstance(version, int) or version < CONFIG_VERSION:
-        return True
-    if "work_modes" in raw_obj:
-        return True
-    mams_invoker = raw_obj.get("mams_invoker")
-    if not isinstance(mams_invoker, dict) or "can_mutate" not in mams_invoker:
-        return True
-    mams_channels = raw_obj.get("mams_channels")
-    if isinstance(mams_channels, list):
-        for raw_mams_channel in mams_channels:
-            if not isinstance(raw_mams_channel, dict) or "can_mutate" not in raw_mams_channel:
-                return True
-        return False
-    return False
-
-
-def load_migration_source(
-    repo_root: Path,
-    *,
-    default_model: Optional[str],
-    default_reasoning_effort: Optional[str],
-) -> Optional[MigrationSource]:
-    config_path = mams_channels_file_path(repo_root)
-
-    if config_path.exists():
-        try:
-            data = json.loads(config_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise RuntimeError(f"Invalid mams_channel config JSON in {config_path}: {exc.msg}") from exc
-        if isinstance(data, dict):
-            if not structured_config_needs_migration(data):
-                return None
-            return MigrationSource(
-                kind="current-structured",
-                path=config_path,
-                config=replace(parse_skill_config_object(data, path=config_path), version=CONFIG_VERSION, updated_at=iso_now()),
-                detail="existing structured config needed normalization",
-            )
-        if isinstance(data, list):
-            return MigrationSource(
-                kind="current-array",
-                path=config_path,
-                config=default_mams_skill_config([parse_mams_channel_config(item) for item in data]),
-                detail="legacy array-based config needed normalization",
-            )
-        raise RuntimeError(f"MAMS channel config file must contain a JSON object or legacy JSON array: {config_path}")
-
-    for legacy_config_path in iter_legacy_structured_config_paths(repo_root):
-        if not legacy_config_path.exists():
-            continue
-        try:
-            data = json.loads(legacy_config_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise RuntimeError(f"Invalid mams_channel config JSON in {legacy_config_path}: {exc.msg}") from exc
-        if isinstance(data, dict):
-            return MigrationSource(
-                kind="legacy-structured",
-                path=legacy_config_path,
-                config=replace(parse_skill_config_object(data, path=legacy_config_path), version=CONFIG_VERSION, updated_at=iso_now()),
-                detail="legacy structured config from the old directory",
-            )
-        if isinstance(data, list):
-            return MigrationSource(
-                kind="legacy-array",
-                path=legacy_config_path,
-                config=default_mams_skill_config([parse_mams_channel_config(item) for item in data]),
-                detail="legacy array-based config from the old directory",
-            )
-        raise RuntimeError(f"MAMS channel config file must contain a JSON object or legacy JSON array: {legacy_config_path}")
-
-    legacy_session_id = read_legacy_session_id(repo_root)
-    legacy_history = read_legacy_session_history(repo_root)
-    if legacy_session_id is None and not legacy_history:
-        return None
-
-    migrated = build_mams_channel_config(
-        DEFAULT_MAMS_CHANNEL_NAME,
-        description=MIGRATED_MAMS_CHANNEL_DESCRIPTION,
-        session_id=legacy_session_id,
-        model=default_model,
-        reasoning_effort=default_reasoning_effort,
-        previous_session_ids=legacy_history,
-    )
-    return MigrationSource(
-        kind="legacy-session",
-        path=legacy_session_file_path(repo_root),
-        config=default_mams_skill_config([migrated]),
-        detail="legacy single-session continuity files",
-    )
-
-
-def migrate_mams_channels_config_to_latest(
-    repo_root: Path,
-    *,
-    default_model: Optional[str],
-    default_reasoning_effort: Optional[str],
-) -> Optional[str]:
-    source = load_migration_source(
-        repo_root,
-        default_model=default_model,
-        default_reasoning_effort=default_reasoning_effort,
-    )
-    if source is None:
-        return None
-    write_skill_config(repo_root, source.config)
-    destination = mams_channels_file_path(repo_root)
-    if source.kind == "legacy-session":
-        return (
-            "Legacy session continuity files were read, normalized, and rewritten into the canonical config at "
-            f"{destination}."
-        )
-    if source.path is not None and source.path != destination:
-        return (
-            f"Legacy config at {source.path} was read, normalized, and rewritten into the canonical config at {destination}. "
-            "User-authored reminder text was left unchanged."
-        )
-    return (
-        f"Config at {destination} was normalized and rewritten into the canonical version {CONFIG_VERSION} format. "
-        "User-authored reminder text was left unchanged."
-    )
 
 
 def find_mams_channel(mams_channels: list[MamsChannelConfig], name: str) -> Optional[MamsChannelConfig]:
@@ -723,41 +574,56 @@ def upsert_mams_channel(
     return next_mams_channels
 
 
-def merge_string_map(
-    current: dict[str, str],
-    patch: Optional[dict[str, Optional[str]]],
-) -> dict[str, str]:
-    updated = dict(current)
-    if not patch:
-        return updated
-    for key, value in patch.items():
-        if value is None:
-            updated.pop(key, None)
-        else:
-            updated[key] = value
-    return updated
+def apply_prompt_profile_block_patch(
+    current: MamsPromptProfileBlock,
+    patch: Optional[dict[str, object]],
+) -> MamsPromptProfileBlock:
+    if patch is None:
+        return current
+    updated = {
+        "description": current.description,
+        "focus": current.focus,
+        "baseline": current.baseline,
+        "extra_context": current.extra_context,
+    }
+    for field in ("description", "focus", "baseline", "extra_context"):
+        if field in patch:
+            value = patch[field]
+            updated[field] = value if value is None else str(value).strip()
+    return MamsPromptProfileBlock(
+        description=updated["description"],
+        focus=updated["focus"],
+        baseline=updated["baseline"],
+        extra_context=updated["extra_context"],
+    )
+
+
+def apply_channel_prompt_profile_patch(
+    current: MamsChannelPromptProfile,
+    patch: Optional[dict[str, object]],
+) -> MamsChannelPromptProfile:
+    if patch is None:
+        return current
+    return MamsChannelPromptProfile(
+        public=apply_prompt_profile_block_patch(
+            current.public,
+            patch.get("public") if isinstance(patch.get("public"), dict) else None,
+        ),
+        plan_stage=apply_prompt_profile_block_patch(
+            current.plan_stage,
+            patch.get("plan_stage") if isinstance(patch.get("plan_stage"), dict) else None,
+        ),
+        execution_stage=apply_prompt_profile_block_patch(
+            current.execution_stage,
+            patch.get("execution_stage") if isinstance(patch.get("execution_stage"), dict) else None,
+        ),
+    )
 
 
 def apply_configure_payload(
     config: MamsSkillConfig,
     payload: ConfigurePayload,
 ) -> MamsSkillConfig:
-    mams_invoker = config.mams_invoker
-    if payload.mams_invoker_patch is not None:
-        stage_patch = payload.mams_invoker_patch.get("stage_guidance")
-        mams_invoker = MamsInvokerConfig(
-            baseline=payload.mams_invoker_patch["baseline"] if "baseline" in payload.mams_invoker_patch else mams_invoker.baseline,
-            working_style=payload.mams_invoker_patch["working_style"] if "working_style" in payload.mams_invoker_patch else mams_invoker.working_style,
-            extra_context=payload.mams_invoker_patch["extra_context"] if "extra_context" in payload.mams_invoker_patch else mams_invoker.extra_context,
-            stage_guidance=merge_string_map(
-                mams_invoker.stage_guidance,
-                stage_patch if isinstance(stage_patch, dict) else None,
-            ),
-            can_mutate=payload.mams_invoker_patch["can_mutate"] if "can_mutate" in payload.mams_invoker_patch else mams_invoker.can_mutate,
-        )
-
-    shared_stages = merge_string_map(config.shared_stages, payload.shared_stages_patch)
-
     mams_channels = list(config.mams_channels)
     if payload.mams_channels_patch:
         for patch in payload.mams_channels_patch:
@@ -766,47 +632,41 @@ def apply_configure_payload(
             if existing is None:
                 updated_mams_channel = build_mams_channel_config(
                     name,
-                    description=patch.get("description"),
-                    focus=patch.get("focus"),
-                    baseline=patch.get("baseline"),
-                    extra_context=patch.get("extra_context"),
-                    stage_guidance=merge_string_map({}, patch.get("stage_guidance") if isinstance(patch.get("stage_guidance"), dict) else None),
+                    prompt_profile=apply_channel_prompt_profile_patch(
+                        default_channel_prompt_profile(),
+                        patch.get("prompt_profile") if isinstance(patch.get("prompt_profile"), dict) else None,
+                    ),
                     can_mutate=patch.get("can_mutate", True),
+                    runner=patch.get("runner", RUNNER_CODEX),
+                    runner_config=patch.get("runner_config"),
                     model=patch.get("model"),
                     reasoning_effort=patch.get("reasoning_effort"),
                 )
             else:
                 updated_mams_channel = build_mams_channel_config(
                     name,
-                    description=patch.get("description") if "description" in patch else existing.description,
-                    focus=patch.get("focus") if "focus" in patch else existing.focus,
-                    baseline=patch.get("baseline") if "baseline" in patch else existing.baseline,
-                    extra_context=patch.get("extra_context") if "extra_context" in patch else existing.extra_context,
-                    stage_guidance=merge_string_map(
-                        existing.stage_guidance,
-                        patch.get("stage_guidance") if isinstance(patch.get("stage_guidance"), dict) else None,
+                    prompt_profile=apply_channel_prompt_profile_patch(
+                        existing.prompt_profile,
+                        patch.get("prompt_profile") if isinstance(patch.get("prompt_profile"), dict) else None,
                     ),
                     can_mutate=patch.get("can_mutate") if "can_mutate" in patch else existing.can_mutate,
+                    runner=patch.get("runner") if "runner" in patch else existing.runner,
+                    runner_config=patch.get("runner_config") if "runner_config" in patch else existing.runner_config,
                     session_id=existing.session_id,
                     model=patch.get("model") if "model" in patch else existing.model,
                     reasoning_effort=patch.get("reasoning_effort") if "reasoning_effort" in patch else existing.reasoning_effort,
                     previous_session_ids=existing.previous_session_ids,
+                    last_stage_context=existing.last_stage_context,
+                    stage_reminder_turn_count=existing.stage_reminder_turn_count,
                 )
             mams_channels = upsert_mams_channel(mams_channels, updated_mams_channel)
 
     return MamsSkillConfig(
         version=CONFIG_VERSION,
-        mams_invoker=mams_invoker,
-        shared_stages=shared_stages,
         mams_channels=mams_channels,
+        invoker_reminder_turn_count=config.invoker_reminder_turn_count,
         updated_at=iso_now(),
     )
-
-
-@dataclass(frozen=True)
-class InitPayload:
-    mode: str
-    background: str
 
 
 @dataclass(frozen=True)
@@ -820,6 +680,7 @@ class ReviewThisPlanPayload:
 class SyncPayload:
     sync_message: str
     fresh_user_message: Optional[str]
+    stage_context: str
 
 
 @dataclass(frozen=True)
@@ -847,8 +708,6 @@ class DangerousNewSessionPayload:
 
 @dataclass(frozen=True)
 class ConfigurePayload:
-    mams_invoker_patch: Optional[dict[str, object]]
-    shared_stages_patch: Optional[dict[str, Optional[str]]]
     mams_channels_patch: Optional[list[dict[str, object]]]
 
 
@@ -862,11 +721,6 @@ class InvokeRequest:
 @dataclass(frozen=True)
 class InvokePayload:
     requests: tuple[InvokeRequest, ...]
-
-
-def validate_update_config_input(stdin_text: str) -> None:
-    if stdin_text.replace("\r\n", "\n").replace("\r", "\n").strip():
-        raise ValueError("update-config does not accept input. Run it with empty stdin.")
 
 
 def parse_invoke_request_object(raw: object, *, index: int) -> InvokeRequest:
@@ -919,50 +773,6 @@ def parse_invoke_payload(stdin_text: str) -> InvokePayload:
         for index, item in enumerate(requests_raw)
     )
     return InvokePayload(requests=requests)
-
-
-def parse_init_payload(stdin_text: str) -> InitPayload:
-    text = stdin_text.replace("\r\n", "\n").replace("\r", "\n").strip()
-    if not text:
-        raise ValueError(
-            "Init input is empty. Provide JSON with exactly one of: task_background or "
-            "recovery_background."
-        )
-
-    try:
-        obj = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Init input must be valid JSON: {exc.msg}") from exc
-
-    if not isinstance(obj, dict):
-        raise ValueError("Init input must be a JSON object.")
-
-    allowed_keys = {
-        INIT_TASK_FIELD,
-        INIT_RECOVERY_FIELD,
-    }
-    unknown_keys = set(obj.keys()) - allowed_keys
-    if unknown_keys:
-        raise ValueError(f"Init input has unsupported fields: {', '.join(sorted(unknown_keys))}")
-
-    background_keys = [key for key in (INIT_TASK_FIELD, INIT_RECOVERY_FIELD) if key in obj]
-    if len(background_keys) != 1:
-        raise ValueError("Init input must contain exactly one of: task_background or recovery_background.")
-
-    if INIT_TASK_FIELD in obj:
-        value = obj[INIT_TASK_FIELD]
-        mode = "task"
-    else:
-        value = obj[INIT_RECOVERY_FIELD]
-        mode = "recovery"
-
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError("Init background must be a non-empty string.")
-
-    return InitPayload(
-        mode=mode,
-        background=value.strip(),
-    )
 
 
 def parse_review_this_plan_payload(stdin_text: str) -> ReviewThisPlanPayload:
@@ -1019,7 +829,7 @@ def parse_sync_payload(stdin_text: str) -> SyncPayload:
     if not isinstance(obj, dict):
         raise ValueError("sync input must be a JSON object.")
 
-    allowed_keys = {SYNC_MESSAGE_FIELD, SYNC_FRESH_USER_FIELD}
+    allowed_keys = {SYNC_MESSAGE_FIELD, SYNC_FRESH_USER_FIELD, SYNC_STAGE_CONTEXT_FIELD}
     unknown_keys = set(obj.keys()) - allowed_keys
     if unknown_keys:
         raise ValueError(f"sync input has unsupported fields: {', '.join(sorted(unknown_keys))}")
@@ -1034,9 +844,14 @@ def parse_sync_payload(stdin_text: str) -> SyncPayload:
             raise ValueError("sync field fresh_user_message must be a non-empty string when provided.")
         fresh_user_message = fresh_user_message.strip()
 
+    stage_context = obj.get(SYNC_STAGE_CONTEXT_FIELD, "plan")
+    if stage_context not in {"plan", "execution"}:
+        raise ValueError("sync field stage_context must be exactly 'plan' or 'execution' when provided.")
+
     return SyncPayload(
         sync_message=sync_message.strip(),
         fresh_user_message=fresh_user_message,
+        stage_context=stage_context,
     )
 
 
@@ -1189,21 +1004,61 @@ def parse_dangerous_new_session_payload(stdin_text: str) -> DangerousNewSessionP
         reasoning_effort=parse_optional_config_string(DANGEROUS_NEW_SESSION_REASONING_EFFORT_FIELD),
     )
 
-
-def parse_nullable_string_patch_map(value: object, *, field_name: str) -> dict[str, Optional[str]]:
+def parse_nullable_prompt_profile_block_patch(
+    value: object,
+    *,
+    field_name: str,
+) -> dict[str, object]:
     if not isinstance(value, dict):
         raise ValueError(f"{field_name} must be a JSON object.")
-    result: dict[str, Optional[str]] = {}
-    for raw_key, raw_value in value.items():
-        key = normalize_optional_string(raw_key)
-        if not key:
-            raise ValueError(f"{field_name} contains an empty key.")
-        if raw_value is None:
-            result[key] = None
+    allowed_keys = {"description", "focus", "baseline", "extra_context"}
+    unknown_keys = set(value.keys()) - allowed_keys
+    if unknown_keys:
+        raise ValueError(
+            f"{field_name} has unsupported fields: {', '.join(sorted(unknown_keys))}."
+        )
+    result: dict[str, object] = {}
+    for field in allowed_keys:
+        if field not in value:
             continue
-        if not isinstance(raw_value, str) or not raw_value.strip():
-            raise ValueError(f"{field_name}.{key} must be a non-empty string or null.")
-        result[key] = raw_value.strip()
+        raw = value[field]
+        if raw is None:
+            result[field] = None
+            continue
+        if not isinstance(raw, str) or not raw.strip():
+            raise ValueError(
+                f"{field_name}.{field} must be a non-empty string or null."
+            )
+        result[field] = raw.strip()
+    return result
+
+
+def parse_nullable_prompt_profile_patch(
+    value: object,
+    *,
+    field_name: str,
+) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{field_name} must be a JSON object.")
+    allowed_keys = {"public", "plan_stage", "execution_stage"}
+    unknown_keys = set(value.keys()) - allowed_keys
+    if unknown_keys:
+        raise ValueError(
+            f"{field_name} has unsupported fields: {', '.join(sorted(unknown_keys))}."
+        )
+
+    result: dict[str, object] = {}
+    for field in ("public", "plan_stage", "execution_stage"):
+        if field not in value:
+            continue
+        raw_block = value[field]
+        if raw_block is None:
+            raise ValueError(f"{field_name}.{field} must be a JSON object when provided.")
+        result[field] = parse_nullable_prompt_profile_block_patch(
+            raw_block,
+            field_name=f"{field_name}.{field}",
+        )
+
     return result
 
 
@@ -1211,7 +1066,7 @@ def parse_configure_payload(stdin_text: str) -> ConfigurePayload:
     text = stdin_text.replace("\r\n", "\n").replace("\r", "\n").strip()
     if not text:
         raise ValueError(
-            "configure input is empty. Provide JSON with at least one of: mams_invoker, shared_stages, mams_channels."
+            "configure input is empty. Provide JSON with mams_channels."
         )
     try:
         obj = json.loads(text)
@@ -1221,51 +1076,13 @@ def parse_configure_payload(stdin_text: str) -> ConfigurePayload:
         raise ValueError("configure input must be a JSON object.")
 
     allowed_keys = {
-        CONFIGURE_MAMS_INVOKER_FIELD,
-        CONFIGURE_SHARED_STAGES_FIELD,
         CONFIGURE_MAMS_CHANNELS_FIELD,
     }
     unknown_keys = set(obj.keys()) - allowed_keys
     if unknown_keys:
         raise ValueError(f"configure input has unsupported fields: {', '.join(sorted(unknown_keys))}")
     if not obj:
-        raise ValueError(
-            "configure input must contain at least one of: mams_invoker, shared_stages, mams_channels."
-        )
-
-    mams_invoker_patch = obj.get(CONFIGURE_MAMS_INVOKER_FIELD)
-    if mams_invoker_patch is not None:
-        if not isinstance(mams_invoker_patch, dict):
-            raise ValueError("configure field mams_invoker must be a JSON object.")
-        allowed_mams_invoker_keys = {"baseline", "working_style", "extra_context", "stage_guidance", "can_mutate"}
-        unknown_mams_invoker_keys = set(mams_invoker_patch.keys()) - allowed_mams_invoker_keys
-        if unknown_mams_invoker_keys:
-            raise ValueError(
-                "configure.mams_invoker has unsupported fields: "
-                + ", ".join(sorted(unknown_mams_invoker_keys))
-            )
-        if "stage_guidance" in mams_invoker_patch and mams_invoker_patch["stage_guidance"] is not None:
-            mams_invoker_patch = dict(mams_invoker_patch)
-            mams_invoker_patch["stage_guidance"] = parse_nullable_string_patch_map(
-                mams_invoker_patch["stage_guidance"],
-                field_name="configure.mams_invoker.stage_guidance",
-            )
-        for field in ("baseline", "working_style", "extra_context"):
-            if field in mams_invoker_patch:
-                value = mams_invoker_patch[field]
-                if value is not None and (not isinstance(value, str) or not value.strip()):
-                    raise ValueError(f"configure.mams_invoker.{field} must be a non-empty string or null.")
-                if isinstance(value, str):
-                    mams_invoker_patch[field] = value.strip()
-        if "can_mutate" in mams_invoker_patch and not isinstance(mams_invoker_patch["can_mutate"], bool):
-            raise ValueError("configure.mams_invoker.can_mutate must be a boolean when provided.")
-
-    shared_stages_patch = obj.get(CONFIGURE_SHARED_STAGES_FIELD)
-    if shared_stages_patch is not None:
-        shared_stages_patch = parse_nullable_string_patch_map(
-            shared_stages_patch,
-            field_name="configure.shared_stages",
-        )
+        raise ValueError("configure input must contain: mams_channels.")
 
     mams_channels_patch_value = obj.get(CONFIGURE_MAMS_CHANNELS_FIELD)
     mams_channels_patch: Optional[list[dict[str, object]]] = None
@@ -1278,11 +1095,7 @@ def parse_configure_payload(stdin_text: str) -> ConfigurePayload:
                 raise ValueError(f"configure.mams_channels[{index}] must be a JSON object.")
             allowed_mams_channel_keys = {
                 "name",
-                "description",
-                "focus",
-                "baseline",
-                "extra_context",
-                "stage_guidance",
+                "prompt_profile",
                 "can_mutate",
                 "runner",
                 "runner_config",
@@ -1299,7 +1112,7 @@ def parse_configure_payload(stdin_text: str) -> ConfigurePayload:
                 raise ValueError(f"configure.mams_channels[{index}] requires a non-empty string field: name.")
             normalized_mams_channel = dict(raw_mams_channel)
             normalized_mams_channel["name"] = name
-            for field in ("description", "focus", "baseline", "extra_context", "model", "reasoning_effort", "runner"):
+            for field in ("model", "reasoning_effort", "runner"):
                 if field in normalized_mams_channel:
                     value = normalized_mams_channel[field]
                     if value is not None and (not isinstance(value, str) or not value.strip()):
@@ -1308,11 +1121,6 @@ def parse_configure_payload(stdin_text: str) -> ConfigurePayload:
                         )
                     if isinstance(value, str):
                         normalized_mams_channel[field] = value.strip()
-            if "stage_guidance" in normalized_mams_channel and normalized_mams_channel["stage_guidance"] is not None:
-                normalized_mams_channel["stage_guidance"] = parse_nullable_string_patch_map(
-                    normalized_mams_channel["stage_guidance"],
-                    field_name=f"configure.mams_channels[{index}].stage_guidance",
-                )
             if "runner" in normalized_mams_channel:
                 normalized_mams_channel["runner"] = normalize_runner(
                     normalized_mams_channel["runner"],
@@ -1323,13 +1131,16 @@ def parse_configure_payload(stdin_text: str) -> ConfigurePayload:
                     normalized_mams_channel["runner_config"],
                     field_name=f"configure.mams_channels[{index}].runner_config",
                 )
+            if "prompt_profile" in normalized_mams_channel:
+                normalized_mams_channel["prompt_profile"] = parse_nullable_prompt_profile_patch(
+                    normalized_mams_channel["prompt_profile"],
+                    field_name=f"configure.mams_channels[{index}].prompt_profile",
+                )
             if "can_mutate" in normalized_mams_channel and not isinstance(normalized_mams_channel["can_mutate"], bool):
                 raise ValueError(f"configure.mams_channels[{index}].can_mutate must be a boolean when provided.")
             mams_channels_patch.append(normalized_mams_channel)
 
     return ConfigurePayload(
-        mams_invoker_patch=mams_invoker_patch,
-        shared_stages_patch=shared_stages_patch,
         mams_channels_patch=mams_channels_patch,
     )
 
@@ -1382,7 +1193,7 @@ def build_reference_notice(repo_root: Path, texts: list[str]) -> list[str]:
         "## Reference Handling Notice",
         "This prompt contains structured file references in the form `[[REF:<relative-path>]]` or `[[REF:<relative-path>::<locator>]]`.",
         "These references point to previously read or externally stored materials; they are not full inline content.",
-        "If compaction, context clear, session replacement, or continuity loss means you cannot confidently identify the referenced source and its relevant content, you must re-read the referenced material before relying on it.",
+        "If you cannot confidently identify the referenced source and its relevant content, you must re-read the referenced material before relying on it.",
         "Do not pretend a reference is understood if the source, location, or content is no longer clear.",
         "",
         "## Referenced Materials In This Call",
@@ -1406,189 +1217,31 @@ def build_labeled_content_block(tag_name: str, label: str, content: str) -> str:
     return wrap_tagged_block(tag_name, f"{label}\n{content.strip()}")
 
 
-def build_mams_reminder_text_for_channel(
-    tool: str,
-    *,
-    full: bool,
-    prompt_text: str,
-) -> str:
-    if full or tool == "init":
-        return prompt_text.strip()
-
-    brief_map = {
-        "sync": (
-            "Persistent collaboration turn with the mams_invoker, not the end user. "
-            "Sync only; discussion, coordination, disagreement handling, and review relay are allowed, but mutation is not. "
-            "The configured User Reminder still applies in full. "
-            "Return ## Discussion Reply, and add ## Plan only when a candidate plan is genuinely ready. "
-            "Compare evidence, surface disagreement clearly, and only ask the mams_invoker to escalate to the user "
-            "if a real unresolved disagreement between you and the mams_invoker has persisted for about 10 turns."
-        ),
-        "review-this-plan": (
-            "Hard gate. Review the plan before any mutation, do not mutate in this turn, and judge from facts and whole-system coherence. "
-            "The configured User Reminder still applies in full. "
-            "The first non-empty line must be approved_to_mutate: true or approved_to_mutate: false, followed by ## Plan Review Reply. "
-            "Do not ask for user input unless a real unresolved disagreement between you and the mams_invoker has persisted for about 10 turns."
-        ),
-        "review-this-work": (
-            "Hard gate. Review the actual work, not intent; do not mutate in this turn. "
-            "The configured User Reminder still applies in full. "
-            "The first non-empty line must be approved_work: true or approved_work: false, followed by ## Work Review Reply. "
-            "Do not ask for user input unless a real unresolved disagreement between you and the mams_invoker has persisted for about 10 turns."
-        ),
-        "execute-this-plan": (
-            "The configured User Reminder still applies in full. "
-            "Execution turn for a mutate-capable mams_channel. Execute the approved plan as a substantial unit, do not stop for trivial progress, and only stop when the approved plan is complete or a real blocker prevents safe continuation. "
-            "Do not widen scope and do not ask the user directly."
-        ),
-        "execute-this-plan-part": (
-            "The configured User Reminder still applies in full. "
-            "Execution turn for a mutate-capable mams_channel. Use a plan part only when the full plan is genuinely too large; a plan part must still be a substantial coherent chunk, not a trivial fragment. "
-            "Do not stop for incidental small edits. Stop only when the approved plan part is complete or a real blocker prevents safe continuation."
-        ),
-    }
-    return brief_map.get(tool, prompt_text.strip())
-
-
-def build_mams_reminder_text_for_invoker(tool: str, *, full: bool) -> str:
-    full_map = {
-        "init": (
-            "Run init on every new shared task and after compact/context clear when you need to re-bootstrap shared context. "
-            "Init is collaboration bootstrap only. It is not discussion and not mutation."
-        ),
-        "invoke": (
-            "Use invoke as the preferred wrapper when coordinating one or more mams_channels. "
-            "Let invoke block until every requested call settles; do not wrap these calls in external polling or repeated status checks."
-        ),
-        "sync": (
-            "This is the general sync turn. Use it for discussion, coordination, disagreement handling, plan repair, and relaying review outcomes. "
-            "Keep pushing for real consensus, and do not stop for user input unless a real unresolved mams_invoker/channel disagreement has persisted for about 10 turns."
-        ),
-        "review-this-plan": (
-            "This is the hard gate before execution begins. Submit a concrete plan, require direct fact-checking, and do not treat mere discussion as approval. "
-            "Do not ask the user just because execution feels uncertain; escalate only when a real unresolved mams_invoker/channel disagreement has persisted for about 10 turns."
-        ),
-        "review-this-work": (
-            "This is the hard gate before delivery. Review actual work, evidence, and coherence. "
-            "approved_work: true accepts only the reviewed execution scope, not automatically the whole larger plan; if more agreed scopes remain, continue directly instead of stopping. "
-            "Do not ask the user just because next execution steps are undecided; escalate only when a real unresolved mams_invoker/channel disagreement has persisted for about 10 turns."
-        ),
-        "execute-this-plan": (
-            "This is the execution turn for a whole approved plan. Do not fragment execution into trivial pieces. Finish the approved plan unless a real blocker or invalidated premise forces a stop. "
-            "Escalate to the user only for a real unresolved mams_invoker/channel disagreement that has persisted for about 10 turns."
-        ),
-        "execute-this-plan-part": (
-            "This is the execution turn for one approved plan part. Use a plan part only when the full plan is genuinely too large, and require the approved part to be a substantial coherent chunk rather than a tiny fragment. "
-            "Do not ask the user about whether to continue execution unless a real unresolved mams_invoker/channel disagreement has persisted for about 10 turns."
-        ),
-        "configure": (
-            "This command applies a mams_invoker-supplied config patch. It does not mutate task files and it does not replace session continuity by itself."
-        ),
-        "update-config": (
-            "This command normalizes managed state into the canonical Mad Agent Mesh config. It does not mutate task files and it does not replace session continuity by itself."
-        ),
-        "dangerous-new-session": (
-            "This command is for destructive continuity replacement. Use it only when the user explicitly authorizes abandoning or switching the managed session continuity."
-        ),
-    }
-    brief_map = {
-        "init": "Init re-establishes the collaboration baseline. Use full reminders here.",
-        "invoke": "Preferred blocking wrapper for one or more mams_channel calls. Let invoke wait once and return settled results; do not externally poll.",
-        "sync": "General sync only. No mutation permission. Full Mad Agent Mesh reminder still applies, and the configured User Reminder still applies in full. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
-        "review-this-plan": "Hard gate before execution. Full Mad Agent Mesh reminder still applies, and the configured User Reminder still applies in full. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
-        "review-this-work": "Hard gate before accepted delivery. approved_work: true accepts only the reviewed execution scope; continue if more agreed scopes remain. Full Mad Agent Mesh reminder still applies, and the configured User Reminder still applies in full. Ask the user only for a real unresolved disagreement that persists for about 10 turns.",
-        "execute-this-plan": "Execute the approved plan as a substantial whole. Do not stop for trivial progress. Full Mad Agent Mesh reminder still applies, and the configured User Reminder still applies in full.",
-        "execute-this-plan-part": "Execute only the approved plan part, and only use plan-part mode for genuinely large plans. The approved part must still be substantial. Full Mad Agent Mesh reminder still applies, and the configured User Reminder still applies in full.",
-        "configure": "MAMS invoker-supplied config patch only. Full Mad Agent Mesh reminder still applies.",
-        "update-config": "Config update only. Full Mad Agent Mesh reminder still applies.",
-        "dangerous-new-session": "Destructive continuity replacement. Full Mad Agent Mesh reminder still applies.",
-    }
-    return (full_map if full else brief_map).get(tool, "")
-
-
-def collaborative_turn_index(tool: str, mams_channel: MamsChannelConfig) -> int:
-    if tool == "init":
-        return 0
-    if tool in {"sync", "review-this-plan", "review-this-work", "execute-this-plan", "execute-this-plan-part"}:
-        return mams_channel.reminder_turn_count + 1
-    return 0
-
-
-def should_use_full_reminder(tool: str, turn_index: int) -> bool:
-    if tool in {"init", "configure", "update-config", "dangerous-new-session"}:
-        return True
-    if turn_index <= 0:
-        return True
-    return (turn_index - 1) % 3 == 0
-
-
-def build_common_stage_items(
-    config: MamsSkillConfig,
-    *,
-    tool: str,
-) -> list[tuple[str, str]]:
-    items: list[tuple[str, str]] = []
-    stage_name = tool
-
-    shared_stage_text = config.shared_stages.get(stage_name)
-    if shared_stage_text:
-        items.append(("Shared Stage Guidance", shared_stage_text))
-
-    return items
-
-
-def build_mams_invoker_user_items(
-    config: MamsSkillConfig,
-    *,
-    tool: str,
-) -> list[tuple[str, str]]:
-    items: list[tuple[str, str]] = []
-    stage_name = tool
-
-    if config.mams_invoker.baseline:
-        items.append(("MAMS Invoker Baseline", config.mams_invoker.baseline))
-    if config.mams_invoker.working_style:
-        items.append(("MAMS Invoker Working Style", config.mams_invoker.working_style))
-    if config.mams_invoker.extra_context:
-        items.append(("MAMS Invoker Extra Context", config.mams_invoker.extra_context))
-    items.append(
-        (
-            "MAMS Invoker Mutation Permission",
-            (
-                "The mams_invoker is allowed to mutate directly when appropriate."
-                if config.mams_invoker.can_mutate
-                else "The mams_invoker is not allowed to mutate directly and must route implementation through a mutate-capable mams_channel."
-            ),
-        )
-    )
-
-    mams_invoker_stage_text = config.mams_invoker.stage_guidance.get(stage_name)
-    if mams_invoker_stage_text:
-        items.append(("MAMS Invoker Stage Guidance", mams_invoker_stage_text))
-
-    return items
-
-
 def build_mams_channel_user_items(
-    config: MamsSkillConfig,
     mams_channel: MamsChannelConfig,
     *,
-    tool: str,
+    stage_context: Optional[str],
 ) -> list[tuple[str, str]]:
-    stage_name = tool
     items: list[tuple[str, str]] = []
+    profile = mams_channel.prompt_profile
+    blocks = [profile.public]
+    if stage_context == "plan":
+        blocks.append(profile.plan_stage)
+    elif stage_context == "execution":
+        blocks.append(profile.execution_stage)
+    merged_profile = merge_prompt_profile_blocks(*blocks)
 
-    if mams_channel.description and mams_channel.description != default_mams_channel_description(mams_channel.name):
-        items.append(("MAMS Channel Description", mams_channel.description))
-    if mams_channel.focus:
-        items.append(("MAMS Channel Focus", mams_channel.focus))
-    if mams_channel.baseline:
-        items.append(("MAMS Channel Baseline", mams_channel.baseline))
-    if mams_channel.extra_context:
-        items.append(("MAMS Channel Extra Context", mams_channel.extra_context))
+    if merged_profile.description:
+        items.append(("Configured Channel Description", merged_profile.description))
+    if merged_profile.focus:
+        items.append(("Configured Channel Focus", merged_profile.focus))
+    if merged_profile.baseline:
+        items.append(("Configured Channel Baseline", merged_profile.baseline))
+    if merged_profile.extra_context:
+        items.append(("Configured Channel Extra Context", merged_profile.extra_context))
     items.append(
         (
-            "MAMS Channel Mutation Permission",
+            "Configured Channel Mutation Permission",
             (
                 "This mams_channel may mutate when the workflow explicitly reaches the mutation entrypoint."
                 if mams_channel.can_mutate
@@ -1597,103 +1250,183 @@ def build_mams_channel_user_items(
         )
     )
 
-    mams_channel_stage_text = mams_channel.stage_guidance.get(stage_name)
-    if mams_channel_stage_text:
-        items.append(("MAMS Channel Stage Guidance", mams_channel_stage_text))
-
     return items
+
+
+def is_stage_oriented_context(stage_context: Optional[str]) -> bool:
+    return stage_context in {"plan", "execution"}
+
+
+def should_use_full_stage_reminder(
+    mams_channel: MamsChannelConfig,
+    *,
+    stage_context: Optional[str],
+) -> bool:
+    if not is_stage_oriented_context(stage_context):
+        return True
+    if mams_channel.last_stage_context != stage_context:
+        return True
+    next_turn_index = mams_channel.stage_reminder_turn_count + 1
+    return (next_turn_index - 1) % 3 == 0
+
+
+def advance_stage_reminder_state(
+    mams_channel: MamsChannelConfig,
+    *,
+    stage_context: Optional[str],
+) -> MamsChannelConfig:
+    if not is_stage_oriented_context(stage_context):
+        return mams_channel
+    if mams_channel.last_stage_context != stage_context:
+        next_count = 1
+    else:
+        next_count = mams_channel.stage_reminder_turn_count + 1
+    return replace(
+        mams_channel,
+        last_stage_context=stage_context,
+        stage_reminder_turn_count=next_count,
+    )
 
 
 def compose_prompt(
     repo_root: Path,
-    config: MamsSkillConfig,
     mams_channel: MamsChannelConfig,
     *,
-    tool: str,
-    full_reminder: bool,
     base_parts: list[str],
+    stage_context: Optional[str] = None,
 ) -> str:
     if not base_parts:
         raise RuntimeError("compose_prompt requires at least one base part.")
-    common_items = build_common_stage_items(config, tool=tool)
-    agent_items = build_mams_channel_user_items(config, mams_channel, tool=tool)
-    skill_reminder = build_mams_reminder_text_for_channel(
-        tool,
-        full=full_reminder,
-        prompt_text=base_parts[0],
+    agent_items = build_mams_channel_user_items(
+        mams_channel,
+        stage_context=stage_context,
     )
-    skill_body_parts = [skill_reminder]
-    common_body = render_named_items(common_items)
-    if common_body:
-        skill_body_parts.append(common_body)
-    skill_block = wrap_tagged_block(
-        "MAMS_REMINDER_FULL" if full_reminder else "MAMS_REMINDER_BRIEF",
-        "## Mad Agent Mesh Reminder ({})\n\n{}".format(
-            "Full" if full_reminder else "Brief",
-            "\n\n".join(part for part in skill_body_parts if part).strip(),
-        ),
+    full_stage_reminder = should_use_full_stage_reminder(
+        mams_channel,
+        stage_context=stage_context,
+    )
+    workflow_block = wrap_tagged_block(
+        "MAMS_WORKFLOW_PROMPT",
+        base_parts[0].strip(),
     )
 
-    user_body = render_named_items(agent_items)
-    user_block = ""
-    if user_body:
-        user_block = wrap_tagged_block(
-            "USER_REMINDER",
-            "## User Reminder\n\n{}".format(user_body),
-        )
+    reminder_blocks: list[str] = [workflow_block]
+    if agent_items:
+        if full_stage_reminder:
+            reminder_blocks.append(
+                wrap_tagged_block(
+                    "CHANNEL_STAGE_REMINDER_FULL",
+                    "## Configured Channel Reminder\n\n{}".format(render_named_items(agent_items)),
+                )
+            )
+        elif is_stage_oriented_context(stage_context):
+            reminder_blocks.append(
+                wrap_tagged_block(
+                    "CHANNEL_STAGE_REMINDER_BRIEF",
+                    (
+                        "## Configured Channel Reminder (Brief)\n\n"
+                        f"The configured {stage_context} stage reminder for this channel still applies in full."
+                    ),
+                )
+            )
 
-    ref_notice_sections = build_reference_notice(repo_root, [skill_block, user_block, *base_parts[1:]])
-    prompt_parts = [skill_block, *ref_notice_sections]
-    if user_block:
-        prompt_parts.append(user_block)
+    ref_notice_sections = build_reference_notice(repo_root, [*reminder_blocks, *base_parts[1:]])
+    prompt_parts = [*reminder_blocks, *ref_notice_sections]
     prompt_parts.extend(base_parts[1:])
     return "\n\n".join(part for part in prompt_parts if part).strip() + "\n"
 
 
-def format_output_for_mams_invoker(
-    repo_root: Path,
-    config: MamsSkillConfig,
-    *,
-    tool: str,
-    full_reminder: bool,
-    reply: str,
-    migration_notice: Optional[str],
-) -> str:
-    normalized_reply = reply.rstrip()
-    common_items = build_common_stage_items(config, tool=tool)
-    mams_invoker_items = build_mams_invoker_user_items(config, tool=tool)
-    skill_body_parts = [build_mams_reminder_text_for_invoker(tool, full=full_reminder)]
-    common_body = render_named_items(common_items)
-    if common_body:
-        skill_body_parts.append(common_body)
-    skill_block = wrap_tagged_block(
-        "MAMS_REMINDER_FULL" if full_reminder else "MAMS_REMINDER_BRIEF",
-        "## Mad Agent Mesh Reminder ({})\n\n{}".format(
-            "Full" if full_reminder else "Brief",
-            "\n\n".join(part for part in skill_body_parts if part).strip(),
+def should_use_full_invoker_reminder(config: MamsSkillConfig) -> bool:
+    return config.invoker_reminder_turn_count % 3 == 0
+
+
+def advance_invoker_reminder_state(config: MamsSkillConfig) -> MamsSkillConfig:
+    return replace(
+        config,
+        invoker_reminder_turn_count=config.invoker_reminder_turn_count + 1,
+        updated_at=iso_now(),
+    )
+
+
+def build_invoker_skill_usage_block(config: MamsSkillConfig) -> str:
+    if should_use_full_invoker_reminder(config):
+        return wrap_tagged_block(
+            "INVOKER_SKILL_USAGE_FULL",
+            "\n".join(
+                [
+                    "## Invoker Skill Usage",
+                    "",
+                    "- You are acting only as the workflow caller and user-facing messenger for this skill.",
+                    "- Do not modify code directly.",
+                    "- Do not provide your own business, planning, review, or implementation judgment.",
+                    "- Route all actual work through this workflow skill and its wrapper commands.",
+                    "- Surface workflow and governor messages to the user, then relay the user's reply back through the workflow.",
+                    "- If this Codex thread has been compacted, or you are unsure of the operating pattern, re-read SKILL.md before continuing.",
+                ]
+            ),
+        )
+    return wrap_tagged_block(
+        "INVOKER_SKILL_USAGE_BRIEF",
+        "\n".join(
+            [
+                "## Invoker Skill Usage (Brief)",
+                "",
+                "The guidance in INVOKER_SKILL_USAGE_FULL still applies in full.",
+                "You are still only the workflow caller and user-facing messenger for this skill.",
+                "Do not modify code directly; route all actual work through the workflow commands.",
+                "If the thread was compacted or the operating pattern is unclear, re-read SKILL.md before continuing.",
+            ]
         ),
     )
 
-    user_body = render_named_items(mams_invoker_items)
-    user_block = ""
-    if user_body:
-        user_block = wrap_tagged_block(
-            "USER_REMINDER",
-            "## User Reminder\n\n{}".format(user_body),
-        )
 
-    ref_notice_sections = build_reference_notice(repo_root, [skill_block, user_block])
-
-    if not skill_block and not user_block and not ref_notice_sections:
-        return append_migration_notice(normalized_reply, migration_notice)
-
+def format_wrapper_output(
+    *,
+    reply: str,
+    user_escalation_request: Optional[UserEscalationRequest],
+    governor_review_reply: Optional[str],
+    invoker_reminder_block: Optional[str] = None,
+) -> str:
+    normalized_reply = reply.rstrip()
     parts = [
-        skill_block,
-        *ref_notice_sections,
-        user_block,
+        invoker_reminder_block or "",
+        (
+            wrap_tagged_block(
+                "GOVERNOR_REVIEW",
+                governor_review_reply,
+            )
+            if governor_review_reply is not None
+            else ""
+        ),
+        (
+            wrap_tagged_block(
+                "USER_ESCALATION_REQUEST",
+                render_user_escalation_request_markdown(user_escalation_request),
+            )
+            if user_escalation_request is not None
+            else ""
+        ),
         wrap_tagged_block("CHANNEL_REPLY", f"## Channel Reply\n\n{normalized_reply}"),
     ]
-    return append_migration_notice("\n\n".join(part for part in parts if part), migration_notice)
+    return "\n\n".join(part for part in parts if part).rstrip() + "\n"
+
+
+def format_invoker_facing_output(
+    repo_root: Path,
+    config: MamsSkillConfig,
+    *,
+    reply: str,
+    user_escalation_request: Optional[UserEscalationRequest],
+    governor_review_reply: Optional[str],
+) -> str:
+    invoker_reminder_block = build_invoker_skill_usage_block(config)
+    write_skill_config(repo_root, advance_invoker_reminder_state(config))
+    return format_wrapper_output(
+        reply=reply,
+        user_escalation_request=user_escalation_request,
+        governor_review_reply=governor_review_reply,
+        invoker_reminder_block=invoker_reminder_block,
+    )
 
 
 def format_invoke_summary(
@@ -1713,11 +1446,25 @@ def format_invoke_summary(
     ]
     result_blocks: list[str] = []
     for item in results:
+        governor_block = ""
+        if item.governor_review_reply is not None:
+            governor_block = wrap_tagged_block(
+                "GOVERNOR_REVIEW",
+                item.governor_review_reply,
+            )
+        escalation_block = ""
+        if item.user_escalation_request is not None:
+            escalation_block = wrap_tagged_block(
+                "USER_ESCALATION_REQUEST",
+                render_user_escalation_request_markdown(item.user_escalation_request),
+            )
         result_body = "\n".join(
             [
                 f"## {item.request.mams_channel_name or DEFAULT_MAMS_CHANNEL_NAME} · {item.request.command} · {item.status}",
                 "",
                 item.reply if item.status == "ok" and item.reply is not None else f"Error: {item.error}",
+                governor_block,
+                escalation_block,
             ]
         ).strip()
         result_blocks.append(wrap_tagged_block("INVOKE_RESULT", result_body))
@@ -1727,57 +1474,21 @@ def format_invoke_summary(
     )
 
 
-def build_init_prompt(
-    repo_root: Path,
-    config: MamsSkillConfig,
-    mams_channel: MamsChannelConfig,
-    stdin_text: str,
-) -> tuple[str, str]:
-    payload = parse_init_payload(stdin_text)
-    if payload.mode == "task":
-        prompt_name = "init-task.md"
-        label = "Task background from the mams_invoker:"
-    else:
-        prompt_name = "init-recovery.md"
-        label = "Recovery background from the mams_invoker:"
-
-    prompt = compose_prompt(
-        repo_root,
-        config,
-        mams_channel,
-        tool="init",
-        full_reminder=True,
-        base_parts=[
-            load_prompt_asset(prompt_name),
-            build_labeled_content_block(
-                "TASK_BACKGROUND" if payload.mode == "task" else "RECOVERY_BACKGROUND",
-                label,
-                payload.background,
-            ),
-        ],
-    )
-
-    return prompt, payload.mode
-
-
 def build_review_this_plan_prompt(
     repo_root: Path,
-    config: MamsSkillConfig,
     mams_channel: MamsChannelConfig,
     stdin_text: str,
-    *,
-    full_reminder: bool,
 ) -> str:
     payload = parse_review_this_plan_payload(stdin_text)
     parts = [
         load_prompt_asset("review-this-plan.md"),
-        build_labeled_content_block("PLAN_FOR_REVIEW", "Plan for review from the mams_invoker:", payload.plan_for_review),
+        build_labeled_content_block("PLAN_FOR_REVIEW", "Submitted plan for review:", payload.plan_for_review),
     ]
 
     if payload.new_information:
         parts.extend(
             [
-                build_labeled_content_block("NEW_INFORMATION", "New information from the mams_invoker:", payload.new_information),
+                build_labeled_content_block("NEW_INFORMATION", "Additional information:", payload.new_information),
             ]
         )
 
@@ -1790,26 +1501,21 @@ def build_review_this_plan_prompt(
 
     return compose_prompt(
         repo_root,
-        config,
         mams_channel,
-        tool="review-this-plan",
-        full_reminder=full_reminder,
         base_parts=parts,
+        stage_context="plan",
     )
 
 
 def build_sync_prompt(
     repo_root: Path,
-    config: MamsSkillConfig,
     mams_channel: MamsChannelConfig,
     stdin_text: str,
-    *,
-    full_reminder: bool,
 ) -> str:
     payload = parse_sync_payload(stdin_text)
     parts = [
         load_prompt_asset("sync.md"),
-        build_labeled_content_block("SYNC_MESSAGE", "Sync message from the mams_invoker:", payload.sync_message),
+        build_labeled_content_block("SYNC_MESSAGE", "Workflow discussion context:", payload.sync_message),
     ]
 
     if payload.fresh_user_message:
@@ -1821,32 +1527,27 @@ def build_sync_prompt(
 
     return compose_prompt(
         repo_root,
-        config,
         mams_channel,
-        tool="sync",
-        full_reminder=full_reminder,
         base_parts=parts,
+        stage_context=payload.stage_context,
     )
 
 
 def build_review_this_work_prompt(
     repo_root: Path,
-    config: MamsSkillConfig,
     mams_channel: MamsChannelConfig,
     stdin_text: str,
-    *,
-    full_reminder: bool,
 ) -> str:
     payload = parse_review_this_work_payload(stdin_text)
     parts = [
         load_prompt_asset("review-this-work.md"),
-        build_labeled_content_block("WORK_FOR_REVIEW", "Work for review from the mams_invoker:", payload.work_for_review),
+        build_labeled_content_block("WORK_FOR_REVIEW", "Submitted work for review:", payload.work_for_review),
     ]
 
     if payload.new_information:
         parts.extend(
             [
-                build_labeled_content_block("NEW_INFORMATION", "New information from the mams_invoker:", payload.new_information),
+                build_labeled_content_block("NEW_INFORMATION", "Additional information:", payload.new_information),
             ]
         )
 
@@ -1859,21 +1560,16 @@ def build_review_this_work_prompt(
 
     return compose_prompt(
         repo_root,
-        config,
         mams_channel,
-        tool="review-this-work",
-        full_reminder=full_reminder,
         base_parts=parts,
+        stage_context="execution",
     )
 
 
 def build_execute_prompt(
     repo_root: Path,
-    config: MamsSkillConfig,
     mams_channel: MamsChannelConfig,
     stdin_text: str,
-    *,
-    full_reminder: bool,
     mode: str,
 ) -> str:
     payload = parse_execute_payload(stdin_text, mode=mode)
@@ -1885,15 +1581,15 @@ def build_execute_prompt(
             (
                 "workspace-write (default mutation sandbox)."
                 if payload.sandbox_mode == EXECUTE_SANDBOX_DEFAULT
-                else "danger-full-access (explicit full-access escalation approved by the mams_invoker)."
+                else "danger-full-access (explicit full-access escalation approved by the workflow caller)."
             ),
         ),
         build_labeled_content_block(
             "APPROVED_PLAN" if mode == "execute-this-plan" else "APPROVED_PLAN_PART",
             (
-                "Approved plan from the mams_invoker:"
+                "Approved plan:"
                 if mode == "execute-this-plan"
-                else "Approved plan part from the mams_invoker:"
+                else "Approved plan part:"
             ),
             payload.approved_scope,
         ),
@@ -1908,12 +1604,59 @@ def build_execute_prompt(
 
     return compose_prompt(
         repo_root,
-        config,
         mams_channel,
-        tool=mode,
-        full_reminder=full_reminder,
         base_parts=parts,
+        stage_context="execution",
     )
+
+
+def build_governor_escalation_review_prompt(
+    repo_root: Path,
+    mams_channel: MamsChannelConfig,
+    *,
+    origin_mams_channel: MamsChannelConfig,
+    origin_command: str,
+    origin_reply: str,
+    user_escalation_request: UserEscalationRequest,
+) -> str:
+    parts = [
+        load_prompt_asset("governor-user-escalation.md"),
+        build_labeled_content_block(
+            "ORIGIN_CHANNEL",
+            "Originating managed channel:",
+            f"{origin_mams_channel.name} ({origin_mams_channel.runner})",
+        ),
+        build_labeled_content_block(
+            "ORIGIN_COMMAND",
+            "Originating command:",
+            origin_command,
+        ),
+        build_labeled_content_block(
+            "ORIGIN_REPLY",
+            "Structured reply from the originating managed channel:",
+            origin_reply,
+        ),
+        wrap_tagged_block(
+            "USER_ESCALATION_REQUEST",
+            render_user_escalation_request_markdown(user_escalation_request),
+        ),
+    ]
+    return compose_prompt(
+        repo_root,
+        mams_channel,
+        base_parts=parts,
+        stage_context=None,
+    )
+
+
+def command_stage_context(command: str, stdin_text: str) -> Optional[str]:
+    if command == "sync":
+        return parse_sync_payload(stdin_text).stage_context
+    if command == "review-this-plan":
+        return "plan"
+    if command in {"review-this-work", "execute-this-plan", "execute-this-plan-part"}:
+        return "execution"
+    return None
 
 
 def resolve_execution_sandbox(cmd: str, stdin_text: str) -> str:
@@ -1974,11 +1717,6 @@ def require_markdown_section(reply: str, title: str, stop_titles: Optional[list[
     return normalized
 
 
-def validate_init_reply(mode: str, reply: str) -> str:
-    expected_title = INIT_TASK_REPLY_TITLE if mode == "task" else INIT_RECOVERY_REPLY_TITLE
-    return require_markdown_section(reply, expected_title)
-
-
 def validate_review_this_plan_reply(reply: str) -> str:
     parse_required_boolean_line(reply, REVIEW_PLAN_APPROVED_FIELD)
     return require_markdown_section(reply, REVIEW_PLAN_REPLY_TITLE)
@@ -1997,44 +1735,99 @@ def validate_sync_reply(reply: str) -> str:
     return normalized
 
 
+def validate_governor_escalation_review_reply(reply: str) -> GovernorEscalationReview:
+    escalate_to_user = parse_required_boolean_line(reply, GOVERNOR_ESCALATE_FIELD)
+    normalized = require_markdown_section(reply, GOVERNOR_REVIEW_REPLY_TITLE)
+    return GovernorEscalationReview(
+        escalate_to_user=escalate_to_user,
+        review_reply=normalized,
+    )
+
+
+def parse_optional_user_escalation_request(reply: str) -> Optional[UserEscalationRequest]:
+    normalized = normalize_reply_text(reply)
+    heading = find_markdown_heading(normalized, USER_ESCALATION_REQUEST_TITLE)
+    if heading is None:
+        return None
+
+    content_start = heading.end()
+    next_heading = re.compile(r"(?im)^#{1,6}\s+.+$").search(normalized, pos=content_start)
+    content_end = next_heading.start() if next_heading is not None else len(normalized)
+    body = normalized[content_start:content_end].strip()
+    if not body:
+        raise ValueError(f"Section ## {USER_ESCALATION_REQUEST_TITLE} must contain non-empty content.")
+
+    parsed: dict[str, str] = {}
+    for line in body.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if ":" not in stripped:
+            raise ValueError(
+                f"Section ## {USER_ESCALATION_REQUEST_TITLE} must use key: value lines."
+            )
+        key, value = stripped.split(":", 1)
+        normalized_key = key.strip().lower().replace(" ", "_")
+        normalized_value = value.strip()
+        if not normalized_value:
+            raise ValueError(
+                f"Section ## {USER_ESCALATION_REQUEST_TITLE} field '{normalized_key}' must be non-empty."
+            )
+        parsed[normalized_key] = normalized_value
+
+    raw_blocking = parsed.get("blocking")
+    question = parsed.get("question")
+    reason = parsed.get("reason")
+    can_continue_without_answer = parsed.get("can_continue_without_answer")
+
+    if raw_blocking is None or question is None or reason is None:
+        raise ValueError(
+            f"Section ## {USER_ESCALATION_REQUEST_TITLE} must include blocking, question, and reason."
+        )
+    lowered_blocking = raw_blocking.lower()
+    if lowered_blocking not in {"true", "false"}:
+        raise ValueError(
+            f"Section ## {USER_ESCALATION_REQUEST_TITLE} field 'blocking' must be true or false."
+        )
+
+    return UserEscalationRequest(
+        blocking=lowered_blocking == "true",
+        question=question,
+        reason=reason,
+        can_continue_without_answer=can_continue_without_answer,
+    )
+
+
 def build_prompt(
     repo_root: Path,
-    config: MamsSkillConfig,
     mams_channel: MamsChannelConfig,
     tool: str,
     stdin_text: str,
-    *,
-    full_reminder: bool,
 ) -> str:
-    if tool == "init":
-        prompt, _mode = build_init_prompt(repo_root, config, mams_channel, stdin_text)
-        return prompt
     if tool == "sync":
-        return build_sync_prompt(repo_root, config, mams_channel, stdin_text, full_reminder=full_reminder)
+        return build_sync_prompt(repo_root, mams_channel, stdin_text)
     if tool == "review-this-plan":
         return build_review_this_plan_prompt(
             repo_root,
-            config,
             mams_channel,
             stdin_text,
-            full_reminder=full_reminder,
         )
     if tool == "review-this-work":
         return build_review_this_work_prompt(
             repo_root,
-            config,
             mams_channel,
             stdin_text,
-            full_reminder=full_reminder,
         )
     if tool in {"execute-this-plan", "execute-this-plan-part"}:
         return build_execute_prompt(
             repo_root,
-            config,
             mams_channel,
             stdin_text,
-            full_reminder=full_reminder,
             mode=tool,
+        )
+    if tool == GOVERNOR_ESCALATION_REVIEW_TOOL:
+        raise ValueError(
+            f"{GOVERNOR_ESCALATION_REVIEW_TOOL} is an internal workflow prompt and must be built explicitly."
         )
     raise ValueError(f"Unsupported tool: {tool}")
 
@@ -2074,12 +1867,217 @@ class RunnerRunResult:
 
 
 @dataclass(frozen=True)
+class UserEscalationRequest:
+    blocking: bool
+    question: str
+    reason: str
+    can_continue_without_answer: Optional[str]
+
+
+@dataclass(frozen=True)
+class GovernorEscalationReview:
+    escalate_to_user: bool
+    review_reply: str
+
+
+@dataclass(frozen=True)
+class ValidatedCommandReply:
+    normalized_reply: str
+    user_escalation_request: Optional[UserEscalationRequest]
+
+
+@dataclass(frozen=True)
 class InvokeSettledResult:
     request: InvokeRequest
     status: str
     reply: Optional[str]
+    user_escalation_request: Optional[UserEscalationRequest]
+    governor_review_reply: Optional[str]
     error: Optional[str]
     updated_mams_channel: Optional[MamsChannelConfig]
+
+
+def validate_command_reply(command: str, reply: str) -> ValidatedCommandReply:
+    if command == "review-this-plan":
+        normalized = validate_review_this_plan_reply(reply)
+        return ValidatedCommandReply(
+            normalized_reply=normalized,
+            user_escalation_request=parse_optional_user_escalation_request(normalized),
+        )
+    if command == "review-this-work":
+        normalized = validate_review_this_work_reply(reply)
+        return ValidatedCommandReply(
+            normalized_reply=normalized,
+            user_escalation_request=parse_optional_user_escalation_request(normalized),
+        )
+    if command == "sync":
+        normalized = validate_sync_reply(reply)
+        return ValidatedCommandReply(
+            normalized_reply=normalized,
+            user_escalation_request=parse_optional_user_escalation_request(normalized),
+        )
+    if command in {"execute-this-plan", "execute-this-plan-part"}:
+        normalized = require_markdown_section(reply, EXECUTE_WORK_REPORT_TITLE)
+        return ValidatedCommandReply(
+            normalized_reply=normalized,
+            user_escalation_request=parse_optional_user_escalation_request(normalized),
+        )
+    if command == GOVERNOR_ESCALATION_REVIEW_TOOL:
+        review = validate_governor_escalation_review_reply(reply)
+        return ValidatedCommandReply(
+            normalized_reply=review.review_reply,
+            user_escalation_request=None,
+        )
+    normalized = reply.rstrip()
+    return ValidatedCommandReply(
+        normalized_reply=normalized,
+        user_escalation_request=parse_optional_user_escalation_request(normalized),
+    )
+
+
+def build_protocol_notice(command: str, validation_error: str) -> str:
+    lines = [
+        "Your previous turn ended without a valid structured result for this workflow command.",
+        f"Validation error: {validation_error}",
+        "Continue from the current managed session state. Do not restart the task from scratch.",
+    ]
+    if command == "sync":
+        lines.append(
+            "You must return a valid `## Discussion Reply`, and include `## Plan` only when a real candidate plan is ready."
+        )
+    elif command == "review-this-plan":
+        lines.append(
+            "You must return `approved_to_mutate: true|false` as the first non-empty line, followed by `## Plan Review Reply`."
+        )
+    elif command == "review-this-work":
+        lines.append(
+            "You must return `approved_work: true|false` as the first non-empty line, followed by `## Work Review Reply`."
+        )
+    elif command in {"execute-this-plan", "execute-this-plan-part"}:
+        lines.append(
+            "You must either continue the approved execution scope or stop only with a valid `## Work Report`."
+        )
+    lines.extend(
+        [
+            "Do not ask the end user directly.",
+            "If you genuinely need a user decision, include a structured `## User Escalation Request` section alongside an otherwise valid result.",
+            "Do not end this turn with unstructured summary text.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def append_protocol_notice(prompt: str, notice: str) -> str:
+    return prompt.rstrip() + "\n\n" + wrap_tagged_block("WORKFLOW_PROTOCOL_NOTICE", notice) + "\n"
+
+
+def render_user_escalation_request_markdown(
+    request: UserEscalationRequest,
+) -> str:
+    lines = [
+        f"blocking: {'true' if request.blocking else 'false'}",
+        f"question: {request.question}",
+        f"reason: {request.reason}",
+    ]
+    if request.can_continue_without_answer:
+        lines.append(f"can_continue_without_answer: {request.can_continue_without_answer}")
+    return "## User Escalation Request\n\n" + "\n".join(lines)
+
+
+def maybe_review_user_escalation_with_governor(
+    repo_root: Path,
+    config: MamsSkillConfig,
+    *,
+    origin_mams_channel: MamsChannelConfig,
+    origin_command: str,
+    origin_reply: str,
+    user_escalation_request: Optional[UserEscalationRequest],
+    timeout_s: int,
+    model: Optional[str],
+    reasoning_effort: Optional[str],
+) -> tuple[Optional[UserEscalationRequest], Optional[str], Optional[MamsChannelConfig]]:
+    if user_escalation_request is None:
+        return None, None, None
+
+    governor = find_mams_channel(config.mams_channels, GOVERNOR_CHANNEL_NAME)
+    if governor is None or governor.name == origin_mams_channel.name:
+        return user_escalation_request, None, None
+
+    prompt = build_governor_escalation_review_prompt(
+        repo_root,
+        governor,
+        origin_mams_channel=origin_mams_channel,
+        origin_command=origin_command,
+        origin_reply=origin_reply,
+        user_escalation_request=user_escalation_request,
+    )
+    result = run_runner_for_mams_channel(
+        repo_root=repo_root,
+        mams_channel=governor,
+        session_id=governor.session_id,
+        prompt=prompt,
+        sandbox_mode=SANDBOX_READ_ONLY,
+        timeout_s=timeout_s,
+        model=model or governor.model or DEFAULT_MODEL,
+        reasoning_effort=reasoning_effort or governor.reasoning_effort or DEFAULT_REASONING_EFFORT,
+    )
+    review = validate_governor_escalation_review_reply(result.reply)
+    updated_governor = replace(
+        governor,
+        session_id=result.session_id,
+        model=governor.model or model,
+        reasoning_effort=governor.reasoning_effort or reasoning_effort,
+        updated_at=iso_now(),
+    )
+    approved_request = user_escalation_request if review.escalate_to_user else None
+    return approved_request, review.review_reply, updated_governor
+
+
+def write_invalid_reply_diagnostic(
+    repo_root: Path,
+    *,
+    mams_channel: MamsChannelConfig,
+    command: str,
+    session_id: Optional[str],
+    validation_error: str,
+    raw_replies: list[tuple[str, str]],
+) -> Path:
+    diagnostics_dir = diagnostics_dir_path(repo_root)
+    diagnostics_dir.mkdir(parents=True, exist_ok=True)
+    filename = (
+        f"{diagnostic_timestamp_slug()}__{mams_channel.name}__{command}__invalid-reply.md"
+    )
+    path = diagnostics_dir / filename
+    session_label = session_id or "(none)"
+    contents = "\n".join(
+        [
+            "# Invalid Managed Channel Reply",
+            "",
+            f"- channel: `{mams_channel.name}`",
+            f"- command: `{command}`",
+            f"- runner: `{mams_channel.runner}`",
+            f"- session_id: `{session_label}`",
+            f"- captured_at: `{iso_now()}`",
+            "",
+            "## Validation Error",
+            "",
+            validation_error,
+            "",
+        ]
+    )
+    for label, raw_reply in raw_replies:
+        contents += "\n".join(
+            [
+                f"## {label}",
+                "",
+                "```text",
+                raw_reply.rstrip(),
+                "```",
+                "",
+            ]
+        )
+    path.write_text(contents, encoding="utf-8")
+    return path
 
 
 def build_dangerous_new_session_prompt(permission_text: str) -> str:
@@ -2118,10 +2116,6 @@ def looks_like_missing_thread_error(message: str) -> bool:
 
 def is_mutating_command(command: str) -> bool:
     return command in INVOKE_MUTATING_COMMANDS
-
-
-def command_requires_stdin(command: str) -> bool:
-    return command != "update-config"
 
 
 def resolve_claude_permission_mode(
@@ -2235,7 +2229,6 @@ def monitor_runner_process(
 
 def execute_command_for_mams_channel(
     repo_root: Path,
-    config: MamsSkillConfig,
     mams_channel: MamsChannelConfig,
     *,
     command: str,
@@ -2243,10 +2236,8 @@ def execute_command_for_mams_channel(
     timeout_s: int,
     model: Optional[str],
     reasoning_effort: Optional[str],
-    full_reminder: bool,
-) -> tuple[str, MamsChannelConfig]:
+) -> tuple[str, Optional[UserEscalationRequest], MamsChannelConfig]:
     session_id = mams_channel.session_id
-    init_mode: Optional[str] = None
 
     if command in INVOKE_MUTATING_COMMANDS and not mams_channel.can_mutate:
         raise RuntimeError(
@@ -2259,70 +2250,109 @@ def execute_command_for_mams_channel(
             )
         )
 
-    try:
-        if command == "init":
-            prompt, init_mode = build_init_prompt(repo_root, config, mams_channel, stdin_text)
-        else:
-            prompt = build_prompt(
-                repo_root,
-                config,
-                mams_channel,
-                command,
-                stdin_text,
-                full_reminder=full_reminder,
+    prompt = build_prompt(
+        repo_root,
+        mams_channel,
+        command,
+        stdin_text,
+    )
+    sandbox_mode = resolve_execution_sandbox(command, stdin_text)
+    stage_context = command_stage_context(command, stdin_text)
+
+    def run_once(current_session_id: Optional[str], current_prompt: str) -> RunnerRunResult:
+        try:
+            return run_runner_for_mams_channel(
+                repo_root=repo_root,
+                mams_channel=mams_channel,
+                session_id=current_session_id,
+                prompt=current_prompt,
+                sandbox_mode=sandbox_mode,
+                timeout_s=timeout_s,
+                model=model,
+                reasoning_effort=reasoning_effort,
             )
-        sandbox_mode = resolve_execution_sandbox(command, stdin_text)
-        result = run_runner_for_mams_channel(
-            repo_root=repo_root,
-            mams_channel=mams_channel,
-            session_id=session_id,
-            prompt=prompt,
-            sandbox_mode=sandbox_mode,
-            timeout_s=timeout_s,
-            model=model,
-            reasoning_effort=reasoning_effort,
-        )
-    except Exception as exc:
-        if session_id and looks_like_missing_thread_error(str(exc)):
-            raise RuntimeError(
-                "\n".join(
-                    [
-                        str(exc),
-                        "",
-                        f"The managed mams_channel '{mams_channel.name}' has a stored session id locally, but the configured runner could not resume it.",
-                        "Do not manually delete or replace the managed mams_channel config and do not call raw runner CLIs directly.",
-                        "If the user explicitly wants to abandon this continuity and start fresh, run "
-                        "<skill_root>/bin/dangerous-new-session.",
-                    ]
-                )
-            ) from exc
-        raise
+        except Exception as exc:
+            if current_session_id and looks_like_missing_thread_error(str(exc)):
+                raise RuntimeError(
+                    "\n".join(
+                        [
+                            str(exc),
+                            "",
+                            f"The managed mams_channel '{mams_channel.name}' has a stored session id locally, but the configured runner could not resume it.",
+                            "Do not manually delete or replace the managed mams_channel config and do not call raw runner CLIs directly.",
+                            "If the user explicitly wants to abandon this continuity and start fresh, run "
+                            "<skill_root>/bin/dangerous-new-session.",
+                        ]
+                    )
+                ) from exc
+            raise
+
+    result = run_once(session_id, prompt)
 
     updated_mams_channel = replace(
         mams_channel,
         session_id=result.session_id,
         model=mams_channel.model or model,
         reasoning_effort=mams_channel.reasoning_effort or reasoning_effort,
-        reminder_turn_count=(
-            0
-            if command == "init"
-            else mams_channel.reminder_turn_count + 1
-            if command in {"sync", "review-this-plan", "review-this-work", "execute-this-plan", "execute-this-plan-part"}
-            else mams_channel.reminder_turn_count
-        ),
         updated_at=iso_now(),
     )
+    updated_mams_channel = advance_stage_reminder_state(
+        updated_mams_channel,
+        stage_context=stage_context,
+    )
 
-    if init_mode is not None:
-        result.reply = validate_init_reply(init_mode, result.reply)
-    elif command == "review-this-plan":
-        result.reply = validate_review_this_plan_reply(result.reply)
-    elif command == "review-this-work":
-        result.reply = validate_review_this_work_reply(result.reply)
-    elif command == "sync":
-        result.reply = validate_sync_reply(result.reply)
+    try:
+        validated = validate_command_reply(command, result.reply)
+        result.reply = validated.normalized_reply
+        user_escalation_request = validated.user_escalation_request
+    except ValueError as exc:
+        retry_notice = build_protocol_notice(command, str(exc))
+        retry_prompt = append_protocol_notice(prompt, retry_notice)
+        retry_result = run_once(result.session_id, retry_prompt)
+        updated_mams_channel = replace(
+            updated_mams_channel,
+            session_id=retry_result.session_id,
+            updated_at=iso_now(),
+        )
+        try:
+            retry_validated = validate_command_reply(command, retry_result.reply)
+            retry_result.reply = retry_validated.normalized_reply
+            return retry_result.reply, retry_validated.user_escalation_request, updated_mams_channel
+        except ValueError as retry_exc:
+            combined_error = (
+                "The managed channel ended twice without a valid structured result.\n"
+                f"First validation error: {exc}\n"
+                f"Second validation error: {retry_exc}"
+            )
+            first_preview = diagnostic_preview(result.reply)
+            second_preview = diagnostic_preview(retry_result.reply)
+            diagnostic_path = write_invalid_reply_diagnostic(
+                repo_root,
+                mams_channel=updated_mams_channel,
+                command=command,
+                session_id=retry_result.session_id,
+                validation_error=combined_error,
+                raw_replies=[
+                    ("First Invalid Reply", result.reply),
+                    ("Second Invalid Reply", retry_result.reply),
+                ],
+            )
+            raise RuntimeError(
+                "\n".join(
+                    [
+                        f"Managed mams_channel '{updated_mams_channel.name}' stopped twice without a valid structured result for command '{command}'.",
+                        f"First validation error: {exc}",
+                        f"Second validation error: {retry_exc}",
+                        f"Diagnostic saved at: {diagnostic_path}",
+                        "First reply preview:",
+                        first_preview,
+                        "Second reply preview:",
+                        second_preview,
+                    ]
+                )
+            ) from retry_exc
 
-    return result.reply, updated_mams_channel
+    return result.reply, user_escalation_request, updated_mams_channel
 
 
 def resolve_mams_channels_for_command(
@@ -2331,12 +2361,7 @@ def resolve_mams_channels_for_command(
     *,
     default_model: Optional[str],
     default_reasoning_effort: Optional[str],
-) -> tuple[MamsSkillConfig, MamsChannelConfig, Optional[str]]:
-    migration_notice = migrate_mams_channels_config_to_latest(
-        repo_root,
-        default_model=default_model,
-        default_reasoning_effort=default_reasoning_effort,
-    )
+) -> tuple[MamsSkillConfig, MamsChannelConfig]:
     config = read_skill_config(repo_root)
     mams_channel = find_mams_channel(config.mams_channels, mams_channel_name)
     if mams_channel is None:
@@ -2345,29 +2370,7 @@ def resolve_mams_channels_for_command(
             model=default_model,
             reasoning_effort=default_reasoning_effort,
         )
-    return config, mams_channel, migration_notice
-
-
-def resolve_config_for_update(
-    repo_root: Path,
-    *,
-    default_model: Optional[str],
-    default_reasoning_effort: Optional[str],
-) -> tuple[MamsSkillConfig, Optional[str], bool]:
-    migration_notice = migrate_mams_channels_config_to_latest(
-        repo_root,
-        default_model=default_model,
-        default_reasoning_effort=default_reasoning_effort,
-    )
-    config_path = mams_channels_file_path(repo_root)
-    created_canonical = False
-    if config_path.exists():
-        config = read_skill_config(repo_root)
-    else:
-        config = default_mams_skill_config([])
-        write_skill_config(repo_root, config)
-        created_canonical = True
-    return config, migration_notice, created_canonical
+    return config, mams_channel
 
 
 def persist_mams_channels_for_command(
@@ -2379,9 +2382,8 @@ def persist_mams_channels_for_command(
         repo_root,
         MamsSkillConfig(
             version=CONFIG_VERSION,
-            mams_invoker=config.mams_invoker,
-            shared_stages=config.shared_stages,
             mams_channels=upsert_mams_channel(config.mams_channels, replace(mams_channel, updated_at=iso_now())),
+            invoker_reminder_turn_count=config.invoker_reminder_turn_count,
             updated_at=iso_now(),
         ),
     )
@@ -2400,24 +2402,12 @@ def persist_multiple_mams_channels(
         )
     updated_config = MamsSkillConfig(
         version=CONFIG_VERSION,
-        mams_invoker=config.mams_invoker,
-        shared_stages=config.shared_stages,
         mams_channels=updated_channels,
+        invoker_reminder_turn_count=config.invoker_reminder_turn_count,
         updated_at=iso_now(),
     )
     write_skill_config(repo_root, updated_config)
     return updated_config
-
-
-def append_migration_notice(reply: str, migration_notice: Optional[str]) -> str:
-    normalized = reply.rstrip()
-    if not migration_notice:
-        return normalized + "\n"
-    return (
-        f"{normalized}\n\n---\n"
-        f"Migration notice: {migration_notice}\n"
-        "Future calls now use the structured managed mams_channel config automatically.\n"
-    )
 
 
 def run_invoke_command(
@@ -2432,13 +2422,9 @@ def run_invoke_command(
     effective_default_reasoning_effort: Optional[str],
 ) -> str:
     payload = parse_invoke_payload(stdin_text)
-    config, migration_notice, _created_canonical = resolve_config_for_update(
-        repo_root,
-        default_model=effective_default_model,
-        default_reasoning_effort=effective_default_reasoning_effort,
-    )
+    config = read_skill_config(repo_root)
 
-    prepared: list[tuple[InvokeRequest, MamsChannelConfig, bool, Optional[str], Optional[str]]] = []
+    prepared: list[tuple[InvokeRequest, MamsChannelConfig, Optional[str], Optional[str]]] = []
     seen_channel_names: set[str] = set()
     for request in payload.requests:
         mams_channel_name = request.mams_channel_name or default_mams_channel_name
@@ -2462,36 +2448,33 @@ def run_invoke_command(
             or mams_channel.reasoning_effort
             or DEFAULT_REASONING_EFFORT
         )
-        turn_index = collaborative_turn_index(request.command, mams_channel)
-        full_reminder = should_use_full_reminder(request.command, turn_index)
         prepared.append(
             (
                 replace(request, mams_channel_name=mams_channel_name),
                 mams_channel,
-                full_reminder,
                 model,
                 reasoning_effort,
             )
         )
 
-    def perform(item: tuple[InvokeRequest, MamsChannelConfig, bool, Optional[str], Optional[str]]) -> InvokeSettledResult:
-        request, mams_channel, full_reminder, model, reasoning_effort = item
+    def perform(item: tuple[InvokeRequest, MamsChannelConfig, Optional[str], Optional[str]]) -> InvokeSettledResult:
+        request, mams_channel, model, reasoning_effort = item
         try:
-            reply, updated_mams_channel = execute_command_for_mams_channel(
+            reply, user_escalation_request, updated_mams_channel = execute_command_for_mams_channel(
                 repo_root,
-                config,
                 mams_channel,
                 command=request.command,
                 stdin_text=request.stdin_text,
                 timeout_s=timeout_s,
                 model=model,
                 reasoning_effort=reasoning_effort,
-                full_reminder=full_reminder,
             )
             return InvokeSettledResult(
                 request=request,
                 status="ok",
                 reply=reply,
+                user_escalation_request=user_escalation_request,
+                governor_review_reply=None,
                 error=None,
                 updated_mams_channel=updated_mams_channel,
             )
@@ -2500,6 +2483,8 @@ def run_invoke_command(
                 request=request,
                 status="error",
                 reply=None,
+                user_escalation_request=None,
+                governor_review_reply=None,
                 error=str(exc),
                 updated_mams_channel=None,
             )
@@ -2513,7 +2498,43 @@ def run_invoke_command(
         settled = [perform(item) for item in prepared]
         execution_mode = "sequential invoke"
 
-    updated_channels = [item.updated_mams_channel for item in settled if item.updated_mams_channel is not None]
+    staged_config = config
+    reviewed_results: list[InvokeSettledResult] = []
+    reviewed_channels: list[MamsChannelConfig] = []
+    for item in settled:
+        if item.status != "ok" or item.updated_mams_channel is None:
+            reviewed_results.append(item)
+            continue
+        approved_request, governor_review_reply, updated_governor = maybe_review_user_escalation_with_governor(
+            repo_root,
+            staged_config,
+            origin_mams_channel=item.updated_mams_channel,
+            origin_command=item.request.command,
+            origin_reply=item.reply or "",
+            user_escalation_request=item.user_escalation_request,
+            timeout_s=timeout_s,
+            model=override_model,
+            reasoning_effort=override_reasoning_effort,
+        )
+        next_result = replace(
+            item,
+            user_escalation_request=approved_request,
+            governor_review_reply=governor_review_reply,
+        )
+        reviewed_results.append(next_result)
+        reviewed_channels.append(item.updated_mams_channel)
+        if updated_governor is not None:
+            reviewed_channels.append(updated_governor)
+            staged_config = MamsSkillConfig(
+                version=staged_config.version,
+                mams_channels=upsert_mams_channel(staged_config.mams_channels, updated_governor),
+                invoker_reminder_turn_count=staged_config.invoker_reminder_turn_count,
+                updated_at=staged_config.updated_at,
+            )
+
+    updated_channels = reviewed_channels or [
+        item.updated_mams_channel for item in settled if item.updated_mams_channel is not None
+    ]
     updated_config = (
         persist_multiple_mams_channels(repo_root, config, updated_channels)
         if updated_channels
@@ -2523,14 +2544,13 @@ def run_invoke_command(
         if updated_mams_channel.runner == RUNNER_CODEX:
             try_promote_exec_session_to_cli(updated_mams_channel.session_id)
 
-    summary = format_invoke_summary(settled, execution_mode=execution_mode)
-    return format_output_for_mams_invoker(
+    summary = format_invoke_summary(reviewed_results, execution_mode=execution_mode)
+    return format_invoker_facing_output(
         repo_root,
         updated_config,
-        tool="invoke",
-        full_reminder=True,
         reply=summary,
-        migration_notice=migration_notice,
+        user_escalation_request=None,
+        governor_review_reply=None,
     )
 
 
@@ -2884,13 +2904,11 @@ def main() -> int:
     start_cwd = Path(args.cwd).expanduser() if cwd_explicit else Path.cwd()
 
     repo_root = find_session_root(start_cwd)
-    if repo_root is None:
-        if cwd_explicit:
-            chosen = start_cwd.expanduser().resolve()
-            chosen_managed_dir = chosen / MANAGED_DIRNAME
-            chosen_legacy_dir = chosen / LEGACY_MANAGED_DIRNAME
-            if not is_global_managed_dir(chosen_managed_dir) and not is_global_managed_dir(chosen_legacy_dir):
-                repo_root = chosen
+    if repo_root is None and cwd_explicit:
+        chosen = start_cwd.expanduser().resolve()
+        chosen_managed_dir = chosen / MANAGED_DIRNAME
+        if not is_global_managed_dir(chosen_managed_dir):
+            repo_root = chosen
 
     if repo_root is None:
         candidates = candidate_roots_with_managed_dir(start_cwd)
@@ -2898,24 +2916,22 @@ def main() -> int:
             "No project Mad Agent Mesh session root is configured.",
             "Could not find an existing managed session anchor:",
             f"  - <dir>/{MANAGED_DIRNAME}/{MAMS_CHANNELS_FILENAME}",
-            f"  - <dir>/{LEGACY_MANAGED_DIRNAME}/{MAMS_CHANNELS_FILENAME} (legacy, auto-migrated once)",
-            f"  - <dir>/{LEGACY_MANAGED_DIRNAME}/{LEGACY_SESSION_FILENAME} (legacy, auto-migrated once)",
-            f"(excluding the global {MANAGED_GLOBAL_DIR} and {CLAUDE_GLOBAL_DIR} directories).",
+            f"(excluding the global {MANAGED_GLOBAL_DIR} directory).",
             "",
             "Ask the user to choose a directory to store the managed session state for this workspace.",
         ]
         if candidates:
-            lines.append(f"Candidate directories that already contain a {MANAGED_DIRNAME}/ or {LEGACY_MANAGED_DIRNAME}/ directory (closest first):")
+            lines.append(f"Candidate directories that already contain a {MANAGED_DIRNAME}/ directory (closest first):")
             for c in candidates:
                 lines.append(f"  - {c}")
             lines.append("Then rerun this command with: --cwd <chosen_dir>")
         else:
-            lines.append(f"No {MANAGED_DIRNAME}/ or {LEGACY_MANAGED_DIRNAME}/ directory was found in parent directories (excluding the global ones).")
+            lines.append(f"No {MANAGED_DIRNAME}/ directory was found in parent directories (excluding the global one).")
             lines.append("Ask the user to choose a directory, then rerun this command with: --cwd <chosen_dir>.")
         raise RuntimeError("\n".join(lines))
 
     stdin_text = sys.stdin.read()
-    if args.cmd != "update-config" and not stdin_text.strip():
+    if not stdin_text.strip():
         eprint("Empty input. Provide content via stdin.")
         return 2
 
@@ -2927,12 +2943,7 @@ def main() -> int:
             payload = parse_configure_payload(stdin_text)
             repo_root.mkdir(parents=True, exist_ok=True)
             (repo_root / MANAGED_DIRNAME).mkdir(parents=True, exist_ok=True)
-            config, _mams_channel, migration_notice = resolve_mams_channels_for_command(
-                repo_root,
-                mams_channel_name,
-                default_model=effective_default_model,
-                default_reasoning_effort=effective_default_reasoning_effort,
-            )
+            config = read_skill_config(repo_root)
             updated_config = apply_configure_payload(config, payload)
             write_skill_config(repo_root, updated_config)
         except Exception as exc:
@@ -2941,64 +2952,19 @@ def main() -> int:
 
         lines = [
             "configure applied.",
-            f"Target mams_channel: {mams_channel_name}",
             f"Config path: {mams_channels_file_path(repo_root)}",
         ]
-        if payload.mams_invoker_patch is not None:
-            lines.append("Updated: mams_invoker")
-        if payload.shared_stages_patch is not None:
-            lines.append("Updated: shared_stages")
         if payload.mams_channels_patch is not None:
             lines.append(
                 "Updated mams_channels: " + ", ".join(patch["name"] for patch in payload.mams_channels_patch)
             )
         sys.stdout.write(
-            format_output_for_mams_invoker(
+            format_invoker_facing_output(
                 repo_root,
                 updated_config,
-                tool="configure",
-                full_reminder=True,
                 reply="\n".join(lines),
-                migration_notice=migration_notice,
-            )
-        )
-        return 0
-
-    if args.cmd == "update-config":
-        try:
-            validate_update_config_input(stdin_text)
-            repo_root.mkdir(parents=True, exist_ok=True)
-            (repo_root / MANAGED_DIRNAME).mkdir(parents=True, exist_ok=True)
-            config, migration_notice, created_canonical = resolve_config_for_update(
-                repo_root,
-                default_model=effective_default_model,
-                default_reasoning_effort=effective_default_reasoning_effort,
-            )
-        except Exception as exc:
-            eprint(str(exc))
-            return 1
-
-        mams_channel_names = ", ".join(mams_channel.name for mams_channel in config.mams_channels) if config.mams_channels else "(none)"
-        if created_canonical:
-            status_line = "Created a canonical managed config because no prior managed config was present."
-        elif migration_notice:
-            status_line = "Normalized existing managed state into the canonical config."
-        else:
-            status_line = "Canonical managed config is already up to date."
-        lines = [
-            "update-config applied.",
-            status_line,
-            f"Config path: {mams_channels_file_path(repo_root)}",
-            f"Managed mams_channels: {mams_channel_names}",
-        ]
-        sys.stdout.write(
-            format_output_for_mams_invoker(
-                repo_root,
-                config,
-                tool="update-config",
-                full_reminder=True,
-                reply="\n".join(lines),
-                migration_notice=migration_notice,
+                user_escalation_request=None,
+                governor_review_reply=None,
             )
         )
         return 0
@@ -3027,7 +2993,7 @@ def main() -> int:
             payload = parse_dangerous_new_session_payload(stdin_text)
             repo_root.mkdir(parents=True, exist_ok=True)
             (repo_root / MANAGED_DIRNAME).mkdir(parents=True, exist_ok=True)
-            config, mams_channel, migration_notice = resolve_mams_channels_for_command(
+            config, mams_channel = resolve_mams_channels_for_command(
                 repo_root,
                 mams_channel_name,
                 default_model=effective_default_model,
@@ -3040,7 +3006,15 @@ def main() -> int:
                 or mams_channel.reasoning_effort
                 or effective_default_reasoning_effort
             )
-            next_description = payload.mams_channel_description or mams_channel.description
+            next_prompt_profile = mams_channel.prompt_profile
+            if payload.mams_channel_description is not None:
+                next_prompt_profile = replace(
+                    next_prompt_profile,
+                    public=replace(
+                        next_prompt_profile.public,
+                        description=payload.mams_channel_description,
+                    ),
+                )
             if payload.target_session_id:
                 current_session_id = payload.target_session_id
                 previous_session_ids = update_previous_session_ids_for_replacement(
@@ -3072,11 +3046,7 @@ def main() -> int:
                 switched_to_existing = False
             updated_mams_channel = build_mams_channel_config(
                 mams_channel.name,
-                description=next_description,
-                focus=mams_channel.focus,
-                baseline=mams_channel.baseline,
-                extra_context=mams_channel.extra_context,
-                stage_guidance=mams_channel.stage_guidance,
+                prompt_profile=next_prompt_profile,
                 can_mutate=mams_channel.can_mutate,
                 runner=mams_channel.runner,
                 runner_config=mams_channel.runner_config,
@@ -3084,7 +3054,8 @@ def main() -> int:
                 model=effective_model,
                 reasoning_effort=effective_reasoning_effort,
                 previous_session_ids=previous_session_ids,
-                reminder_turn_count=0,
+                last_stage_context=None,
+                stage_reminder_turn_count=0,
             )
             persist_mams_channels_for_command(repo_root, config, updated_mams_channel)
         except Exception as exc:
@@ -3110,19 +3081,18 @@ def main() -> int:
             lines.append("There was no prior managed session id for this mams_channel to record.")
         updated_config = read_skill_config(repo_root)
         sys.stdout.write(
-            format_output_for_mams_invoker(
+            format_invoker_facing_output(
                 repo_root,
                 updated_config,
-                tool="dangerous-new-session",
-                full_reminder=True,
                 reply="\n".join(lines),
-                migration_notice=migration_notice,
+                user_escalation_request=None,
+                governor_review_reply=None,
             )
         )
         return 0
 
     try:
-        config, mams_channel, migration_notice = resolve_mams_channels_for_command(
+        config, mams_channel = resolve_mams_channels_for_command(
             repo_root,
             mams_channel_name,
             default_model=effective_default_model,
@@ -3135,37 +3105,48 @@ def main() -> int:
     session_id = mams_channel.session_id
     model = args.model or mams_channel.model or DEFAULT_MODEL
     reasoning_effort = args.reasoning_effort or mams_channel.reasoning_effort or DEFAULT_REASONING_EFFORT
-    turn_index = collaborative_turn_index(args.cmd, mams_channel)
-    full_reminder = should_use_full_reminder(args.cmd, turn_index)
-
     try:
-        reply, updated_mams_channel = execute_command_for_mams_channel(
+        reply, user_escalation_request, updated_mams_channel = execute_command_for_mams_channel(
             repo_root,
-            config,
             mams_channel,
             command=args.cmd,
             stdin_text=stdin_text,
             timeout_s=args.timeout_s,
             model=model,
             reasoning_effort=reasoning_effort,
-            full_reminder=full_reminder,
         )
     except Exception as exc:
         eprint(str(exc))
         return 1
 
-    persist_mams_channels_for_command(repo_root, config, updated_mams_channel)
+    governor_review_reply: Optional[str] = None
+    approved_escalation_request, governor_review_reply, updated_governor = maybe_review_user_escalation_with_governor(
+        repo_root,
+        config,
+        origin_mams_channel=updated_mams_channel,
+        origin_command=args.cmd,
+        origin_reply=reply,
+        user_escalation_request=user_escalation_request,
+        timeout_s=args.timeout_s,
+        model=args.model,
+        reasoning_effort=args.reasoning_effort,
+    )
+    updated_channels_to_persist = [updated_mams_channel]
+    if updated_governor is not None:
+        updated_channels_to_persist.append(updated_governor)
+    updated_config = persist_multiple_mams_channels(repo_root, config, updated_channels_to_persist)
     if updated_mams_channel.runner == RUNNER_CODEX:
         try_promote_exec_session_to_cli(updated_mams_channel.session_id)
+    if updated_governor is not None and updated_governor.runner == RUNNER_CODEX:
+        try_promote_exec_session_to_cli(updated_governor.session_id)
 
     sys.stdout.write(
-        format_output_for_mams_invoker(
+        format_invoker_facing_output(
             repo_root,
-            config,
-            tool=args.cmd,
-            full_reminder=full_reminder if args.cmd != "init" else True,
+            updated_config,
             reply=reply,
-            migration_notice=migration_notice,
+            user_escalation_request=approved_escalation_request,
+            governor_review_reply=governor_review_reply,
         )
     )
     return 0
