@@ -259,6 +259,16 @@ class MadAgentMeshIntegrationTests(unittest.TestCase):
         self.assertFalse((ROOT / "init.md").exists())
         self.assertFalse((ROOT / "update-config.md").exists())
 
+    def test_skill_ui_metadata_exists_and_mentions_explicit_skill_use(self) -> None:
+        metadata_path = ROOT / "agents" / "openai.yaml"
+        self.assertTrue(metadata_path.is_file(), metadata_path)
+        contents = metadata_path.read_text(encoding="utf-8")
+        self.assertIn('display_name: "mad-agent-mesh"', contents)
+        self.assertIn('short_description: "Route work through managed workflow channels"', contents)
+        self.assertIn('default_prompt: "Use $mad-agent-mesh', contents)
+        self.assertIn("modifying code directly", contents)
+        self.assertIn("allow_implicit_invocation: true", contents)
+
     def test_governor_escalation_prompt_asset_exists(self) -> None:
         prompt_path = ROOT / "prompts" / "governor-user-escalation.md"
         self.assertTrue(prompt_path.is_file(), prompt_path)

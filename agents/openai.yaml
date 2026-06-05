@@ -1,0 +1,7 @@
+interface:
+  display_name: "mad-agent-mesh"
+  short_description: "Route work through managed workflow channels"
+  default_prompt: "Use $mad-agent-mesh to route the user's request through managed workflow channels instead of modifying code directly."
+
+policy:
+  allow_implicit_invocation: true
