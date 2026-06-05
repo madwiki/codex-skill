@@ -237,6 +237,35 @@ class MadAgentMeshIntegrationTests(unittest.TestCase):
         idx = argv.index("--sandbox")
         return argv[idx + 1]
 
+    def test_active_wrapper_command_surface_exists_and_legacy_commands_are_absent(self) -> None:
+        expected_bins = {
+            "configure",
+            "dangerous-new-session",
+            "execute-this-plan",
+            "execute-this-plan-part",
+            "invoke",
+            "review-this-plan",
+            "review-this-work",
+            "sync",
+        }
+        actual_bins = {
+            path.name
+            for path in (ROOT / "bin").iterdir()
+            if path.is_file() and path.name != "mad_agent_mesh.py"
+        }
+        self.assertEqual(actual_bins, expected_bins)
+        self.assertFalse((ROOT / "bin" / "init").exists())
+        self.assertFalse((ROOT / "bin" / "update-config").exists())
+        self.assertFalse((ROOT / "init.md").exists())
+        self.assertFalse((ROOT / "update-config.md").exists())
+
+    def test_governor_escalation_prompt_asset_exists(self) -> None:
+        prompt_path = ROOT / "prompts" / "governor-user-escalation.md"
+        self.assertTrue(prompt_path.is_file(), prompt_path)
+        contents = prompt_path.read_text(encoding="utf-8")
+        self.assertIn("escalate_to_user: true", contents)
+        self.assertIn("## Governor Review Reply", contents)
+
     def test_first_turn_creates_default_channel_and_persists_session(self) -> None:
         tempdir, workspace = self.create_workspace()
         self.addCleanup(tempdir.cleanup)
