@@ -425,6 +425,52 @@ class MadAgentMeshIntegrationTests(unittest.TestCase):
         self.assertIn("<<<INVOKER_SKILL_USAGE_FULL.BEGIN>>>", proc4.stdout)
         self.assertEqual(state4["config"]["invoker_reminder_turn_count"], 4)
 
+    def test_invoker_skill_usage_reminder_cadence_is_global_across_wrapper_commands(self) -> None:
+        tempdir, workspace = self.create_workspace(
+            initial_config=self.build_config([self.build_channel("default", session_id="existing")])
+        )
+        self.addCleanup(tempdir.cleanup)
+
+        configure_proc, _captures1, state1 = self.run_in_workspace(
+            workspace,
+            "configure",
+            json.dumps(
+                {
+                    "mams_channels": [
+                        {
+                            "name": "reviewer-a",
+                            "can_mutate": False,
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            ),
+        )
+        self.assertEqual(configure_proc.returncode, 0, configure_proc.stderr)
+        self.assertIn("<<<INVOKER_SKILL_USAGE_FULL.BEGIN>>>", configure_proc.stdout)
+        self.assertEqual(state1["config"]["invoker_reminder_turn_count"], 1)
+
+        invoke_proc, _captures2, state2 = self.run_in_workspace(
+            workspace,
+            "invoke",
+            json.dumps(
+                {
+                    "requests": [
+                        {
+                            "command": "review-this-plan",
+                            "mams_channel": "default",
+                            "input": {"plan_for_review": "Plan v1"},
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            ),
+            "approved_to_mutate: true\n\n## Plan Review Reply\n\nLooks coherent.",
+        )
+        self.assertEqual(invoke_proc.returncode, 0, invoke_proc.stderr)
+        self.assertIn("<<<INVOKER_SKILL_USAGE_BRIEF.BEGIN>>>", invoke_proc.stdout)
+        self.assertEqual(state2["config"]["invoker_reminder_turn_count"], 2)
+
     def test_nonstandard_stop_retries_once_and_writes_diagnostic_on_second_failure(self) -> None:
         tempdir, workspace = self.create_workspace(
             initial_config=self.build_config([self.build_channel("default", session_id="existing")])

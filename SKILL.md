@@ -65,6 +65,7 @@ The wrapper also injects an Invoker-facing usage reminder into successful wrappe
 
 - first reply: full
 - then `brief / brief / full ...`
+- the cadence is global across successful wrapper replies, not tied to one specific command
 - the full reminder re-states that the caller is only the workflow messenger and must route work through this skill
 - the brief reminder says the full reminder still applies
 - the reminder also tells the caller to re-read `SKILL.md` after compaction or when the operating pattern is unclear
