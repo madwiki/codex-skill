@@ -500,6 +500,65 @@ class MadAgentMeshIntegrationTests(unittest.TestCase):
         self.assertIn("<<<INVOKER_SKILL_USAGE_BRIEF.BEGIN>>>", invoke_proc.stdout)
         self.assertEqual(state2["config"]["invoker_reminder_turn_count"], 2)
 
+    def test_invoker_skill_usage_reminder_is_prepended_before_channel_reply(self) -> None:
+        tempdir, workspace = self.create_workspace(
+            initial_config=self.build_config([self.build_channel("default", session_id="existing")])
+        )
+        self.addCleanup(tempdir.cleanup)
+
+        proc, _captures, _state = self.run_in_workspace(
+            workspace,
+            "review-this-plan",
+            '{"plan_for_review":"Plan v1"}',
+            "approved_to_mutate: true\n\n## Plan Review Reply\n\nLooks coherent.",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        stripped = proc.stdout.lstrip()
+        self.assertTrue(
+            stripped.startswith("<<<INVOKER_SKILL_USAGE_FULL.BEGIN>>>")
+            or stripped.startswith("<<<INVOKER_SKILL_USAGE_BRIEF.BEGIN>>>"),
+            proc.stdout,
+        )
+        self.assertLess(
+            proc.stdout.index("<<<INVOKER_SKILL_USAGE_"),
+            proc.stdout.index("<<<CHANNEL_REPLY.BEGIN>>>"),
+        )
+
+    def test_invoker_skill_usage_reminder_is_prepended_before_invoke_summary(self) -> None:
+        tempdir, workspace = self.create_workspace(
+            initial_config=self.build_config([self.build_channel("default", session_id="existing")])
+        )
+        self.addCleanup(tempdir.cleanup)
+
+        proc, _captures, _state = self.run_in_workspace(
+            workspace,
+            "invoke",
+            json.dumps(
+                {
+                    "requests": [
+                        {
+                            "command": "review-this-plan",
+                            "mams_channel": "default",
+                            "input": {"plan_for_review": "Plan v1"},
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            ),
+            "approved_to_mutate: true\n\n## Plan Review Reply\n\nLooks coherent.",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        stripped = proc.stdout.lstrip()
+        self.assertTrue(
+            stripped.startswith("<<<INVOKER_SKILL_USAGE_FULL.BEGIN>>>")
+            or stripped.startswith("<<<INVOKER_SKILL_USAGE_BRIEF.BEGIN>>>"),
+            proc.stdout,
+        )
+        self.assertLess(
+            proc.stdout.index("<<<INVOKER_SKILL_USAGE_"),
+            proc.stdout.index("<<<CHANNEL_REPLY.BEGIN>>>"),
+        )
+
     def test_nonstandard_stop_retries_once_and_writes_diagnostic_on_second_failure(self) -> None:
         tempdir, workspace = self.create_workspace(
             initial_config=self.build_config([self.build_channel("default", session_id="existing")])
